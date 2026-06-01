@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: '13 5 * * *'
+    - cron: '20 1 * * *'
   workflow_dispatch:
     inputs:
       report_date:
@@ -26,9 +26,14 @@ jobs:
     env:
       TZ: Asia/Shanghai
       ENABLE_REMOTE_TRANSLATION: "1"
-      ENGLISH_OUTPUT_MODE: "1"
+      ENGLISH_OUTPUT_MODE: "0"
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
       DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      REPORT_HOUR: "9"
+      REPORT_MINUTE: "20"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
