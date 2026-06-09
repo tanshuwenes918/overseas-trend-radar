@@ -54,16 +54,45 @@ ARTICLE_EXCERPT_LIMIT = 1400
 
 
 SECTION_TITLES = {
-    "top_signals": "今日三大信号",
     "head_releases": "头部发行",
-    "music_ai_industry": "平台 / AI / 产业",
+    "music_ai_industry": "AI·产业动向",
     "music_news": "补位音乐资讯",
     "holiday_events": "节庆预警",
-    "social_trends": "社媒趋势",
-    "culture_art": "跨界 / 政策观察",
-    "politics": "跨界 / 政策观察",
-    "action_items": "今日执行建议",
+    "social_trends": "社媒热点",
+    "culture_art": "文化·艺术界",
+    "politics": "国际政坛",
 }
+
+
+REPORT_SECTION_ORDER = [
+    "head_releases",
+    "music_ai_industry",
+    "social_trends",
+    "culture_art",
+    "politics",
+    "holiday_events",
+]
+
+
+SECTION_LIMITS = {
+    "head_releases": 5,
+    "music_ai_industry": 4,
+    "social_trends": 4,
+    "culture_art": 3,
+    "politics": 3,
+}
+
+
+SECTION_MIN_BUSINESS_SCORES = {
+    "head_releases": 3.0,
+    "music_ai_industry": 6.0,
+    "social_trends": 6.0,
+    "culture_art": 5.0,
+    "politics": 5.0,
+}
+
+
+MAX_REPORT_ITEMS = 18
 
 
 COUNTRY_NAMES = {
@@ -244,6 +273,126 @@ CULTURE_KEYWORDS = [
 ]
 
 
+BUSINESS_CORE_KEYWORDS = [
+    "ai music",
+    "ai-generated",
+    "aigc",
+    "generative ai",
+    "artificial intelligence",
+    "music video",
+    "ai video",
+    "text-to-video",
+    "suno",
+    "udio",
+    "runway",
+    "pika",
+    "luma",
+    "kling",
+    "elevenlabs",
+    "stability ai",
+    "openai",
+    "virtual artist",
+    "virtual idol",
+    "avatar",
+    "remix",
+    "cover",
+    "soundtrack",
+    "film score",
+    "sync",
+    "tiktok",
+    "reels",
+    "shorts",
+    "viral",
+    "challenge",
+    "meme",
+    "creator",
+    "ugc",
+    "streaming",
+    "subscription",
+    "royalty",
+    "rights",
+    "licensing",
+    "copyright",
+    "distribution",
+    "spotify",
+    "youtube",
+    "soundcloud",
+    "bandlab",
+    "distrokid",
+    "tunecore",
+]
+
+
+VANSO_RELEVANCE_KEYWORDS = [
+    "mood",
+    "ambient",
+    "playlist",
+    "short-form",
+    "short audio",
+    "music app",
+    "streaming",
+    "discovery",
+    "distribution",
+    "creator",
+    "independent artist",
+    "fan",
+    "fandom",
+]
+
+
+VIZASOUND_RELEVANCE_KEYWORDS = [
+    "ai song",
+    "song generator",
+    "music generator",
+    "ai music video",
+    "music video",
+    "video generator",
+    "virtual performer",
+    "contest",
+    "competition",
+    "award",
+    "live stream",
+    "youtube premiere",
+    "episode",
+]
+
+
+LOW_VALUE_KEYWORDS = [
+    "restaurant",
+    "bill",
+    "airport",
+    "crime",
+    "lawsuit against",
+    "divorce",
+    "dating",
+    "red carpet",
+    "box office",
+    "soccer transfer",
+    "stock market",
+]
+
+
+HOLIDAY_VALUE_KEYWORDS = [
+    "father",
+    "mother",
+    "valentine",
+    "halloween",
+    "christmas",
+    "new year",
+    "thanksgiving",
+    "easter",
+    "dragon boat",
+    "mid-autumn",
+    "labor",
+    "youth",
+    "music",
+    "carnival",
+    "eid",
+    "ramadan",
+    "diwali",
+]
+
+
 @dataclass(frozen=True)
 class FeedSource:
     key: str
@@ -269,6 +418,8 @@ class NewsItem:
     priority: int
     tag: str
     score: float
+    business_score: float = 0.0
+    score_reasons: list[str] | None = None
     cn_summary: str = ""
     article_excerpt: str = ""
     cn_title: str = ""
@@ -1206,7 +1357,8 @@ def enrich_items_with_llm(
     system_prompt = (
         "你是海外音乐与内容运营分析师。"
         "请把输入新闻加工成适合中国团队阅读的运营情报，输出简体中文 JSON。"
-        "每条新闻都要给出更完整的中文标题、80到140字摘要、为什么值得运营关注、适用市场/语区、可执行动作提示、风险提醒。"
+        "每条新闻只给出更完整的中文标题和 60 到 110 字的一行摘要，摘要要包含关键时间、数据、平台、作品或影响点。"
+        "不要写运营意义、可执行动作或模板化建议。"
         "不要杜撰未给出的事实，不确定就保守概括。"
     )
     payload = {
@@ -1217,11 +1369,7 @@ def enrich_items_with_llm(
                 {
                     "id": "item_1",
                     "cn_title": "中文标题",
-                    "summary_zh": "80-140字完整摘要",
-                    "why_it_matters": "一句话解释运营意义",
-                    "market_hint": "适合的国家/语区",
-                    "action_hint": "今天可跟进的动作",
-                    "risk_note": "风险或限制，没有则填无",
+                    "summary_zh": "60-110字一行摘要",
                 }
             ]
         },
@@ -1252,6 +1400,162 @@ def enrich_items_with_llm(
         item.risk_note = normalize_whitespace(enriched.get("risk_note", ""))
 
 
+def empty_report_sections() -> dict[str, list[NewsItem]]:
+    return {section: [] for section in SECTION_TITLES if section != "holiday_events"}
+
+
+def enforce_report_limits(sections: dict[str, list[NewsItem]]) -> dict[str, list[NewsItem]]:
+    limited = empty_report_sections()
+    for section, items in sections.items():
+        section_limit = SECTION_LIMITS.get(section, 3)
+        sorted_items = sorted(
+            items,
+            key=lambda item: (
+                item.score,
+                item.published_at.timestamp() if item.published_at else 0,
+            ),
+            reverse=True,
+        )
+        limited[section] = sorted_items[:section_limit]
+
+    all_items: list[tuple[str, NewsItem]] = [
+        (section, item)
+        for section in REPORT_SECTION_ORDER
+        if section != "holiday_events"
+        for item in limited.get(section, [])
+    ]
+    if len(all_items) <= MAX_REPORT_ITEMS:
+        return limited
+
+    keep_ids = {
+        id(item)
+        for _, item in sorted(
+            all_items,
+            key=lambda pair: (
+                pair[1].score,
+                pair[1].published_at.timestamp() if pair[1].published_at else 0,
+            ),
+            reverse=True,
+        )[:MAX_REPORT_ITEMS]
+    }
+    for section in limited:
+        limited[section] = [item for item in limited[section] if id(item) in keep_ids]
+    return limited
+
+
+def editorial_select_sections(
+    sections: dict[str, list[NewsItem]],
+    state: dict[str, Any],
+    diagnostics: list[str],
+    audit: dict[str, Any] | None = None,
+) -> dict[str, list[NewsItem]]:
+    fallback = enforce_report_limits(sections)
+    if not llm_is_configured():
+        return fallback
+
+    candidate_items: list[NewsItem] = []
+    for section in REPORT_SECTION_ORDER:
+        if section == "holiday_events":
+            continue
+        candidate_items.extend(sections.get(section, []))
+    if not candidate_items:
+        return fallback
+
+    payload_items: list[dict[str, Any]] = []
+    id_to_item: dict[str, NewsItem] = {}
+    for index, item in enumerate(candidate_items, start=1):
+        item_id = f"item_{index}"
+        id_to_item[item_id] = item
+        payload_items.append(
+            {
+                "id": item_id,
+                "section": item.section,
+                "section_title": SECTION_TITLES.get(item.section, item.section),
+                "source": item.source_name,
+                "title": item.title,
+                "summary": item.cn_summary or item.summary,
+                "score": round(item.score, 2),
+                "business_score": round(item.business_score, 2),
+                "score_reasons": item.score_reasons or [],
+                "published_at": item.published_at.isoformat() if item.published_at else "",
+                "link": item.link,
+            }
+        )
+
+    system_prompt = (
+        "你是 Vanso 与 Vizasound 的海外情报总编。"
+        "Vanso 是 AI 音乐流媒体和短音频兴趣图谱平台；Vizasound 是 AI 音乐创作平台，承载 The Aidols 和 The Aimmys。"
+        "请只做精选、合并和压缩，不要写运营意义/可执行动作这类模板废话。"
+        "固定保留这些栏目：头部发行、AI·产业动向、社媒热点、文化·艺术界、国际政坛、节庆预警。"
+        "普通电影、普通政治、普通生活争议、普通明星八卦不要选，除非与 AI 音乐、AI 视频、音乐传播、版权分发、创作者经济或影音联动强相关。"
+        "每条输出一行新闻稿口吻：标题要短，summary_zh 写关键信息、时间、数据或影响点。"
+        "总条数最多 18 条；没有高质量内容的栏目可以少选。输出 JSON。"
+    )
+    payload = {
+        "items": payload_items,
+        "section_limits": SECTION_LIMITS,
+        "output_schema": {
+            "items": [
+                {
+                    "id": "item_1",
+                    "section": "head_releases",
+                    "cn_title": "短标题",
+                    "summary_zh": "一行摘要中标题后的内容，不超过 120 个中文字符",
+                }
+            ]
+        },
+    }
+    result = call_llm_json(system_prompt, payload, state, diagnostics, "editorial_selection")
+    if not result:
+        return fallback
+
+    selected = result.get("items", [])
+    if not isinstance(selected, list):
+        diagnostics.append("LLM 总编精选返回格式异常")
+        return fallback
+
+    refined = empty_report_sections()
+    seen_links: set[str] = set()
+    allowed_sections = {section for section in REPORT_SECTION_ORDER if section != "holiday_events"}
+    for entry in selected:
+        if not isinstance(entry, dict):
+            continue
+        item = id_to_item.get(str(entry.get("id", "")))
+        if not item:
+            continue
+        section = str(entry.get("section") or item.section)
+        if section not in allowed_sections:
+            section = item.section
+        if len(refined[section]) >= SECTION_LIMITS.get(section, 3):
+            continue
+        link_key = normalize_whitespace(item.link) or normalize_title_key(item.title)
+        if link_key in seen_links:
+            continue
+        seen_links.add(link_key)
+        item.section = section
+        item.cn_title = trim_title(normalize_whitespace(str(entry.get("cn_title", ""))) or display_item_title(item), 70)
+        item.cn_summary = trim_title(
+            normalize_whitespace(str(entry.get("summary_zh", ""))) or item.cn_summary or heuristic_cn_summary(item),
+            140,
+        )
+        refined[section].append(item)
+
+    refined = enforce_report_limits(refined)
+    selected_count = sum(len(items) for items in refined.values())
+    if selected_count < min(4, len(candidate_items)):
+        diagnostics.append("LLM 总编精选有效条目过少，已回退到规则复筛结果")
+        return fallback
+
+    if audit is not None:
+        audit["llm_selected"] = [
+            audit_news_item(item)
+            for section in REPORT_SECTION_ORDER
+            if section != "holiday_events"
+            for item in refined.get(section, [])
+        ]
+    return refined
+
+
 def translate_holiday_name(
     name: str,
     state: dict[str, Any],
@@ -1277,6 +1581,107 @@ def translate_holiday_name(
 
 def contains_any(text: str, keywords: tuple[str, ...] | list[str]) -> bool:
     return any(keyword_matches(text, keyword) for keyword in keywords)
+
+
+def matched_keywords(text: str, keywords: tuple[str, ...] | list[str]) -> list[str]:
+    return [keyword for keyword in keywords if keyword_matches(text, keyword)]
+
+
+def business_relevance_score(section: str, text: str) -> tuple[float, list[str]]:
+    lowered = text.lower()
+    score = 0.0
+    reasons: list[str] = []
+
+    core_matches = matched_keywords(lowered, BUSINESS_CORE_KEYWORDS)
+    if core_matches:
+        score += min(8.0, len(core_matches) * 1.4)
+        reasons.append("业务核心词: " + ", ".join(core_matches[:5]))
+
+    vanso_matches = matched_keywords(lowered, VANSO_RELEVANCE_KEYWORDS)
+    if vanso_matches:
+        score += min(4.0, len(vanso_matches) * 1.0)
+        reasons.append("Vanso 相关: " + ", ".join(vanso_matches[:4]))
+
+    vizasound_matches = matched_keywords(lowered, VIZASOUND_RELEVANCE_KEYWORDS)
+    if vizasound_matches:
+        score += min(5.0, len(vizasound_matches) * 1.2)
+        reasons.append("Vizasound 相关: " + ", ".join(vizasound_matches[:4]))
+
+    if section == "head_releases":
+        if contains_any(lowered, HEAD_RELEASE_INCLUDE):
+            score += 3.0
+            reasons.append("发行动态")
+        if matched_keywords(lowered, HEAD_RELEASE_PRIORITY_ARTISTS):
+            score += 3.0
+            reasons.append("头部艺人")
+
+    if section == "music_ai_industry":
+        if contains_any(lowered, ("royalty", "rights", "licensing", "copyright", "subscription", "distribution")):
+            score += 3.0
+            reasons.append("版权/分发/订阅")
+
+    if section == "social_trends":
+        if contains_any(lowered, ("tiktok", "reels", "shorts", "viral", "challenge", "meme")) and contains_any(
+            lowered,
+            ("song", "music", "sound", "audio", "dance", "remix", "creator", "ai"),
+        ):
+            score += 4.0
+            reasons.append("短内容传播")
+
+    if section == "culture_art":
+        if contains_any(lowered, ("soundtrack", "film score", "composer", "music video", "concert film", "musical", "song")):
+            score += 4.0
+            reasons.append("影音音乐联动")
+
+    if section == "politics":
+        if contains_any(lowered, ("ai", "copyright", "licensing", "platform", "tiktok", "youtube", "trade", "tariff")):
+            score += 4.0
+            reasons.append("平台/政策影响")
+
+    low_value_matches = matched_keywords(lowered, LOW_VALUE_KEYWORDS)
+    if low_value_matches:
+        score -= min(5.0, len(low_value_matches) * 1.5)
+        reasons.append("低价值词: " + ", ".join(low_value_matches[:3]))
+
+    return score, reasons
+
+
+def passes_business_gate(section: str, text: str, business_score: float) -> bool:
+    min_score = SECTION_MIN_BUSINESS_SCORES.get(section, 5.0)
+    if business_score < min_score:
+        return False
+    if section == "culture_art":
+        return contains_any(
+            text,
+            (
+                "music",
+                "song",
+                "soundtrack",
+                "film score",
+                "composer",
+                "music video",
+                "musical",
+                "ai",
+            ),
+        )
+    if section == "politics":
+        return contains_any(
+            text,
+            (
+                "ai",
+                "copyright",
+                "licensing",
+                "platform",
+                "tiktok",
+                "youtube",
+                "trade",
+                "tariff",
+                "streaming",
+            ),
+        )
+    if section == "social_trends":
+        return contains_any(text, ("music", "song", "sound", "audio", "dance", "remix", "creator", "ai"))
+    return True
 
 
 def infer_release_tag(text: str) -> str:
@@ -1450,8 +1855,12 @@ def filter_items_for_source(
             if not source.key.endswith("_head_release"):
                 continue
 
+        business_score, score_reasons = business_relevance_score(source.section, full_text)
+        if not passes_business_gate(source.section, full_text, business_score):
+            continue
+
         tag = item_tag(source.section, full_text)
-        score = score_item(source, item, report_dt)
+        score = score_item(source, item, report_dt) + business_score
         selected.append(
             NewsItem(
                 source_key=source.key,
@@ -1464,6 +1873,8 @@ def filter_items_for_source(
                 priority=source.priority,
                 tag=tag,
                 score=score,
+                business_score=business_score,
+                score_reasons=score_reasons,
             )
         )
 
@@ -1490,19 +1901,66 @@ def filter_items_for_source(
     return unique
 
 
-def fetch_section_items(report_dt: datetime, diagnostics: list[str]) -> dict[str, list[NewsItem]]:
+def audit_feed_item(source: FeedSource, item: dict[str, Any], report_dt: datetime) -> dict[str, Any]:
+    full_text = f"{item.get('title', '')} {item.get('summary', '')}"
+    business_score, reasons = business_relevance_score(source.section, full_text)
+    published_at = item.get("published_at")
+    in_window = is_item_in_report_window(published_at, report_dt)
+    return {
+        "source_key": source.key,
+        "source_name": source.name,
+        "section": source.section,
+        "section_title": SECTION_TITLES.get(source.section, source.section),
+        "title": item.get("title", ""),
+        "link": item.get("link", ""),
+        "published_at": published_at.isoformat() if published_at else "",
+        "in_report_window": in_window,
+        "business_score": round(business_score, 2),
+        "score_reasons": reasons,
+    }
+
+
+def audit_news_item(item: NewsItem) -> dict[str, Any]:
+    return {
+        "source_key": item.source_key,
+        "source_name": item.source_name,
+        "section": item.section,
+        "section_title": SECTION_TITLES.get(item.section, item.section),
+        "title": item.title,
+        "cn_title": display_item_title(item),
+        "link": item.link,
+        "published_at": item.published_at.isoformat() if item.published_at else "",
+        "tag": item.tag,
+        "score": round(item.score, 2),
+        "business_score": round(item.business_score, 2),
+        "score_reasons": item.score_reasons or [],
+    }
+
+
+def fetch_section_items(
+    report_dt: datetime,
+    diagnostics: list[str],
+    audit: dict[str, Any] | None = None,
+) -> dict[str, list[NewsItem]]:
     sections: dict[str, list[NewsItem]] = {
         section: []
         for section in SECTION_TITLES
-        if section not in {"top_signals", "holiday_events", "action_items"}
+        if section != "holiday_events"
     }
 
-    def process_source(source: FeedSource) -> tuple[str, list[NewsItem], str | None]:
+    if audit is not None:
+        audit.setdefault("raw_candidates", [])
+        audit.setdefault("filtered_candidates", [])
+        audit.setdefault("scored_candidates", [])
+        audit.setdefault("final_selected", [])
+
+    def process_source(source: FeedSource) -> tuple[str, list[NewsItem], list[dict[str, Any]], str | None]:
         try:
             feed_text = fetch_text(source.url)
             feed_items = parse_feed_items(feed_text)
+            raw_items = [audit_feed_item(source, item, report_dt) for item in feed_items]
             items = filter_items_for_source(source, feed_items, report_dt)
-            return source.section, items, None
+            return source.section, items, raw_items, None
         except (
             urllib.error.URLError,
             subprocess.CalledProcessError,
@@ -1511,12 +1969,15 @@ def fetch_section_items(report_dt: datetime, diagnostics: list[str]) -> dict[str
             TimeoutError,
             ValueError,
         ) as exc:
-            return source.section, [], f"{source.name} 抓取失败: {exc}"
+            return source.section, [], [], f"{source.name} 抓取失败: {exc}"
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(process_source, source) for source in FEED_SOURCES]
         for future in concurrent.futures.as_completed(futures):
-            section, items, error = future.result()
+            section, items, raw_items, error = future.result()
+            if audit is not None:
+                audit["raw_candidates"].extend(raw_items)
+                audit["filtered_candidates"].extend(audit_news_item(item) for item in items)
             sections[section].extend(items)
             if error:
                 diagnostics.append(error)
@@ -1537,10 +1998,11 @@ def fetch_section_items(report_dt: datetime, diagnostics: list[str]) -> dict[str
                 continue
             seen_titles.add(title_key)
             deduped.append(item)
-        section_limit = 4 if section in {"head_releases", "music_ai_industry"} else 3
-        if section == "politics":
-            section_limit = 2
+        section_limit = SECTION_LIMITS.get(section, 3)
         sections[section] = deduped[:section_limit]
+        if audit is not None:
+            audit["scored_candidates"].extend(audit_news_item(item) for item in deduped)
+            audit["final_selected"].extend(audit_news_item(item) for item in sections[section])
     return sections
 
 
@@ -1587,6 +2049,10 @@ def fetch_holiday_items(
                 if not (0 <= days_left <= 5 or 25 <= days_left <= 30):
                     continue
                 name = holiday.get("localName") or holiday.get("name")
+                english_name = holiday.get("name") or ""
+                holiday_text = f"{name} {english_name}"
+                if not contains_any(holiday_text, HOLIDAY_VALUE_KEYWORDS):
+                    continue
                 bucket = "urgent" if days_left <= 5 else "advance"
                 grouped_items[bucket].append(
                     {
@@ -1594,7 +2060,7 @@ def fetch_holiday_items(
                         "country_name": COUNTRY_NAMES.get(country, country),
                         "name": name,
                         "name_cn": translate_holiday_name(name, state, diagnostics),
-                        "english_name": holiday.get("name"),
+                        "english_name": english_name,
                         "date": holiday_date,
                         "days_left": days_left,
                         "tag": "5天内提醒" if days_left <= 5 else "25-30天预警",
@@ -1618,7 +2084,7 @@ def fetch_holiday_items(
                 continue
             seen.add(key)
             unique.append(item)
-        grouped_items[bucket] = unique[:4]
+        grouped_items[bucket] = unique[:2]
     return grouped_items
 
 
@@ -1717,6 +2183,16 @@ def format_date_cn(value: date) -> str:
     return f"{value.year:04d}-{value.month:02d}-{value.day:02d}"
 
 
+def format_report_date(value: date) -> str:
+    return f"{value.year:04d}.{value.month:02d}.{value.day:02d}"
+
+
+def format_date_short(value: date | None) -> str:
+    if value is None:
+        return ""
+    return f"{value.month}/{value.day}"
+
+
 def trim_title(title: str, max_len: int = 110) -> str:
     if len(title) <= max_len:
         return title
@@ -1725,6 +2201,24 @@ def trim_title(title: str, max_len: int = 110) -> str:
 
 def display_item_title(item: NewsItem) -> str:
     return normalize_whitespace(item.cn_title or item.cn_summary or item.title)
+
+
+def markdown_source(item: NewsItem) -> str:
+    source = normalize_whitespace(item.source_name)
+    if item.link:
+        return f"[{source}]({item.link})"
+    return source
+
+
+def concise_item_summary(item: NewsItem) -> str:
+    summary = normalize_whitespace(item.cn_summary or heuristic_cn_summary(item))
+    title = display_item_title(item)
+    if summary == title:
+        summary = normalize_whitespace(item.summary)
+    summary = trim_title(summary, 130)
+    if not summary and item.published_at:
+        summary = f"{format_date_short(item.published_at.date())} 发布"
+    return summary
 
 
 def default_why_it_matters(item: NewsItem) -> str:
@@ -1768,25 +2262,11 @@ def infer_social_stage(item: NewsItem) -> str:
 
 
 def section_item_lines(item: NewsItem, mode: str) -> list[str]:
-    title = trim_title(display_item_title(item), 76)
-    summary = trim_title(normalize_whitespace(item.cn_summary or heuristic_cn_summary(item)), 160)
-    why = trim_title(item.why_it_matters or default_why_it_matters(item), 80)
-    action = trim_title(item.action_hint or default_action_hint(item), 80)
-    if mode == "social":
-        return [
-            f"• {title}",
-            f"  - 平台：{infer_social_platform(item)}",
-            f"  - 热度阶段：{infer_social_stage(item)}",
-            f"  - 可复用玩法：{action}",
-            f"  - 信源：[{item.source_name}]({item.link})",
-        ]
-    return [
-        f"• {title}",
-        f"  - 事实：{summary}",
-        f"  - 运营意义：{why}",
-        f"  - 可执行动作：{action}",
-        f"  - 信源：[{item.source_name}]({item.link})",
-    ]
+    title = trim_title(display_item_title(item), 72)
+    summary = concise_item_summary(item)
+    if summary:
+        return [f"• **{title}** — {summary} ({markdown_source(item)})"]
+    return [f"• **{title}** ({markdown_source(item)})"]
 
 
 def holiday_group_title(bucket: str) -> str:
@@ -1797,29 +2277,15 @@ def holiday_group_title(bucket: str) -> str:
 
 def holiday_to_markdown_line(item: dict[str, Any]) -> str:
     holiday_name = item.get("name_cn") or item["name"]
-    why_text = (
-        "距离节点进入 25-30 天窗口，适合开始做节日歌单、封面和本地化排期。"
-        if item["days_left"] > 5
-        else "已经进入 5 天内窗口，今天就该确认上线节奏和倒计时物料。"
-    )
-    return "\n".join(
-        [
-            f"• {item['country_name']} / {holiday_name}",
-            f"  - 日期：{format_date_cn(item['date'])}（D-{item['days_left']}）",
-            f"  - 为什么现在看：{why_text}",
-            f"  - 建议动作：{item.get('recommended_action', '')}",
-            f"  - 信源：[{item['source_name']}]({item['link']})",
-        ]
-    )
+    timing = f"{format_date_short(item['date'])} / D-{item['days_left']}"
+    action = item.get("recommended_action", "")
+    return f"• **{holiday_name}（{item['country_name']}）** — {timing}，{action} ([{item['source_name']}]({item['link']}))"
 
 
 def price_alert_to_markdown_line(item: dict[str, Any]) -> str:
     before = " / ".join(item["before"]) if item["before"] else "无历史快照"
     after = " / ".join(item["after"])
-    return (
-        f"- [订阅价格] {item['service']} 的官方订阅价格发生变化，旧价格为 {before}；当前价格为 {after}。  \n"
-        f"  信源: [{item['service']}]({item['link']})"
-    )
+    return f"• **{item['service']} 订阅价格变化** — 旧价格：{before}；当前价格：{after} ([{item['service']}]({item['link']}))"
 
 
 def fallback_action_plan(
@@ -2016,64 +2482,37 @@ def holiday_lines(holidays: dict[str, list[dict[str, Any]]]) -> list[str]:
         items = holidays.get(bucket, [])
         if not items:
             continue
-        lines.append(f"{holiday_group_title(bucket)}：")
         lines.extend(holiday_to_markdown_line(item) for item in items)
     return lines
 
 
 def build_card_payload(
     report_dt: datetime,
-    top_signals: list[str],
     sections: dict[str, list[NewsItem]],
     holidays: dict[str, list[dict[str, Any]]],
     price_alerts: list[dict[str, Any]],
-    action_plan: dict[str, list[str]],
 ) -> dict[str, Any]:
-    report_label = format_date_cn(report_dt.date())
-    report_issue_time = f"{DEFAULT_REPORT_HOUR:02d}:{DEFAULT_REPORT_MINUTE:02d}"
+    report_label = format_report_date(report_dt.date())
     elements: list[dict[str, Any]] = [
         {
             "tag": "markdown",
             "content": (
-                f"**海外运营晨报 | {report_label} {report_issue_time}**\n"
-                f"统计截止: {report_dt.strftime('%Y-%m-%d %H:%M %Z')}\n"
-                "口径: 默认抓取前一自然日，必要时补充当日 09:20 前的重要更新"
+                f"**海外运营每日舆情播报 | {report_label}**\n"
+                "本播报聚焦 AI 音乐、AI 视频、短内容传播、版权分发、创作者经济与影音联动。"
             ),
         }
     ]
 
-    if top_signals:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "markdown",
-                "content": "【今日三大信号】\n"
-                + "\n".join(f"{index}. {line}" for index, line in enumerate(top_signals, start=1)),
-            }
-        )
-
-    ordered_sections = [
-        "head_releases",
-        "music_ai_industry",
-        "social_trends",
-        "holiday_events",
-    ]
-
-    for section in ordered_sections:
+    for section in REPORT_SECTION_ORDER:
         lines: list[str] = []
         if section == "holiday_events":
             lines.extend(holiday_lines(holidays))
-            if not lines:
-                lines.append("- 今日无高优先级节庆提醒")
         elif section == "music_ai_industry":
-            for item in sections[section]:
+            for item in sections.get(section, []):
                 lines.extend(section_item_lines(item, "standard"))
             lines.extend(price_alert_to_markdown_line(item) for item in price_alerts)
-        elif section == "social_trends":
-            for item in sections[section]:
-                lines.extend(section_item_lines(item, "social"))
         else:
-            for item in sections[section]:
+            for item in sections.get(section, []):
                 lines.extend(section_item_lines(item, "standard"))
 
         if not lines:
@@ -2087,37 +2526,13 @@ def build_card_payload(
             }
         )
 
-    cross_lines: list[str] = []
-    for item in sections["culture_art"]:
-        cross_lines.extend(section_item_lines(item, "standard"))
-    for item in sections["politics"]:
-        cross_lines.extend(section_item_lines(item, "standard"))
-    if cross_lines:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "markdown",
-                "content": "【跨界 / 政策观察】\n" + "\n".join(cross_lines[:20]),
-            }
-        )
-
-    action_lines = action_plan_to_markdown_lines(action_plan)
-    if action_lines:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "markdown",
-                "content": "【今日执行建议】\n" + "\n".join(action_lines),
-            }
-        )
-
     return {
         "msg_type": "interactive",
         "card": {
             "config": {"wide_screen_mode": True, "enable_forward": True},
             "header": {
                 "template": "blue",
-                "title": {"tag": "plain_text", "content": f"海外运营晨报 | {report_label} {report_issue_time}"},
+                "title": {"tag": "plain_text", "content": f"海外运营每日舆情播报 | {report_label}"},
             },
             "elements": elements,
         },
@@ -2126,25 +2541,14 @@ def build_card_payload(
 
 def build_console_preview(
     report_dt: datetime,
-    top_signals: list[str],
     sections: dict[str, list[NewsItem]],
     holidays: dict[str, list[dict[str, Any]]],
     price_alerts: list[dict[str, Any]],
-    action_plan: dict[str, list[str]],
     diagnostics: list[str],
 ) -> str:
-    report_issue_time = f"{DEFAULT_REPORT_HOUR:02d}:{DEFAULT_REPORT_MINUTE:02d}"
-    blocks = [f"海外运营晨报 | {format_date_cn(report_dt.date())} {report_issue_time}"]
-    if top_signals:
-        blocks.append("\n【今日三大信号】")
-        blocks.extend(f"{index}. {line}" for index, line in enumerate(top_signals, start=1))
+    blocks = [f"海外运营每日舆情播报 | {format_report_date(report_dt.date())}"]
 
-    for section in [
-        "head_releases",
-        "music_ai_industry",
-        "social_trends",
-        "holiday_events",
-    ]:
+    for section in REPORT_SECTION_ORDER:
         blocks.append(f"\n【{SECTION_TITLES[section]}】")
         if section == "holiday_events":
             lines = holiday_lines(holidays)
@@ -2154,47 +2558,88 @@ def build_console_preview(
                 blocks.append("- 今日无高优先级节庆提醒")
             continue
         if section == "music_ai_industry":
-            if sections[section]:
+            if sections.get(section):
                 for item in sections[section]:
                     blocks.extend(section_item_lines(item, "standard"))
             if price_alerts:
                 blocks.extend(price_alert_to_markdown_line(item) for item in price_alerts)
             if not sections[section] and not price_alerts:
-                blocks.append("- 今日无高优先级平台 / AI / 产业动态")
-            continue
-        if section == "social_trends":
-            if sections[section]:
-                for item in sections[section]:
-                    blocks.extend(section_item_lines(item, "social"))
-            else:
                 blocks.append("- 今日无高优先级条目")
             continue
-        if sections[section]:
+        if sections.get(section):
             for item in sections[section]:
                 blocks.extend(section_item_lines(item, "standard"))
         else:
             blocks.append("- 今日无高优先级条目")
 
-    cross_lines: list[str] = []
-    for item in sections["culture_art"]:
-        cross_lines.extend(section_item_lines(item, "standard"))
-    for item in sections["politics"]:
-        cross_lines.extend(section_item_lines(item, "standard"))
-    blocks.append("\n【跨界 / 政策观察】")
-    if cross_lines:
-        blocks.extend(cross_lines)
-    else:
-        blocks.append("- 今日无强相关高优先级条目")
-
-    action_lines = action_plan_to_markdown_lines(action_plan)
-    if action_lines:
-        blocks.append("\n【今日执行建议】")
-        blocks.extend(action_lines)
+    blocks.append("\n本播报内容基于海外公开信源自动抓取、初筛、复筛和总编精选生成。")
 
     if diagnostics:
         blocks.append("\n【诊断信息】")
         blocks.extend(f"- {line}" for line in diagnostics)
     return "\n".join(blocks)
+
+
+def count_report_items(
+    sections: dict[str, list[NewsItem]],
+    holidays: dict[str, list[dict[str, Any]]],
+    price_alerts: list[dict[str, Any]],
+) -> int:
+    news_count = sum(
+        len(sections.get(section, []))
+        for section in REPORT_SECTION_ORDER
+        if section != "holiday_events"
+    )
+    holiday_count = sum(len(items) for items in holidays.values())
+    return news_count + holiday_count + len(price_alerts)
+
+
+def validate_report_quality(
+    sections: dict[str, list[NewsItem]],
+    holidays: dict[str, list[dict[str, Any]]],
+    price_alerts: list[dict[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    total_items = count_report_items(sections, holidays, price_alerts)
+    if total_items == 0:
+        errors.append("无合格条目，停止发送，避免硬凑低质量日报")
+    if total_items > MAX_REPORT_ITEMS:
+        errors.append(f"条目数 {total_items} 超过上限 {MAX_REPORT_ITEMS}")
+
+    for section in REPORT_SECTION_ORDER:
+        if section == "holiday_events":
+            continue
+        if len(sections.get(section, [])) > SECTION_LIMITS.get(section, 3):
+            errors.append(f"{SECTION_TITLES[section]} 超过板块上限")
+        for item in sections.get(section, []):
+            if not item.source_name:
+                errors.append(f"缺少信源: {item.title}")
+            if len(section_item_lines(item, "standard")[0]) > 220:
+                errors.append(f"条目过长: {display_item_title(item)}")
+            if section in {"culture_art", "politics", "social_trends"}:
+                text = f"{item.title} {item.summary} {item.cn_summary}"
+                if not passes_business_gate(section, text, item.business_score):
+                    errors.append(f"业务相关性不足: {display_item_title(item)}")
+    return errors
+
+
+def write_audit_files(audit: dict[str, Any]) -> None:
+    ensure_data_dir()
+    files = {
+        "raw_candidates.json": audit.get("raw_candidates", []),
+        "filtered_candidates.json": audit.get("filtered_candidates", []),
+        "scored_candidates.json": audit.get("scored_candidates", []),
+        "final_selected.json": audit.get("final_selected", []),
+    }
+    if audit.get("llm_selected"):
+        files["llm_selected.json"] = audit["llm_selected"]
+    if audit.get("quality_errors"):
+        files["quality_errors.json"] = audit["quality_errors"]
+    for filename, payload in files.items():
+        (DATA_DIR / filename).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -2238,35 +2683,43 @@ def main() -> int:
     state = load_state()
     if not llm_is_configured():
         diagnostics.append(
-            "LLM 未配置，当前使用规则摘要与回退动作建议。可通过 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL 启用增强。"
+            "LLM 未配置，当前使用规则复筛与简洁摘要。可通过 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL 启用总编精选。"
         )
 
-    sections = fetch_section_items(report_dt, diagnostics)
+    audit: dict[str, Any] = {
+        "report_date": report_dt.date().isoformat(),
+        "raw_candidates": [],
+        "filtered_candidates": [],
+        "scored_candidates": [],
+        "final_selected": [],
+    }
+    sections = fetch_section_items(report_dt, diagnostics, audit=audit)
     holidays = fetch_holiday_items(report_dt.date(), state, diagnostics)
     enrich_items_with_llm(sections, state, diagnostics)
     price_alerts = fetch_price_alerts(report_dt, state, diagnostics)
-    top_signals = build_top_signals(sections, holidays, price_alerts)
-    action_plan = generate_action_plan(
-        report_dt.date(),
-        sections,
-        holidays,
-        price_alerts,
-        state,
-        diagnostics,
-    )
+    sections = editorial_select_sections(sections, state, diagnostics, audit=audit)
+    audit["final_selected"] = [
+        audit_news_item(item)
+        for section in REPORT_SECTION_ORDER
+        if section != "holiday_events"
+        for item in sections.get(section, [])
+    ]
+    quality_errors = validate_report_quality(sections, holidays, price_alerts)
+    if quality_errors:
+        audit["quality_errors"] = quality_errors
+        diagnostics.extend(f"质量闸门: {error}" for error in quality_errors)
     save_state(state)
     ensure_data_dir()
+    write_audit_files(audit)
 
     preview = build_console_preview(
         report_dt=report_dt,
-        top_signals=top_signals,
         sections=sections,
         holidays=holidays,
         price_alerts=price_alerts,
-        action_plan=action_plan,
         diagnostics=diagnostics if args.debug else [],
     )
-    payload = build_card_payload(report_dt, top_signals, sections, holidays, price_alerts, action_plan)
+    payload = build_card_payload(report_dt, sections, holidays, price_alerts)
     (DATA_DIR / "last_report.md").write_text(preview, encoding="utf-8")
     (DATA_DIR / "last_card.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -2275,6 +2728,10 @@ def main() -> int:
     print(preview)
 
     if args.send:
+        if quality_errors:
+            print("\n质量闸门未通过，已停止发送。", file=sys.stderr)
+            return 4
+
         delivery_state = state.setdefault("delivery", {})
         report_date_str = report_dt.date().isoformat()
         if args.skip_if_already_sent and delivery_state.get("last_sent_date") == report_date_str:
