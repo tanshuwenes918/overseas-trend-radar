@@ -5,6 +5,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import html
+import http.client
 import json
 import os
 import re
@@ -1810,6 +1811,7 @@ def translate_text_to_zh(
         return translated
     except (
         urllib.error.URLError,
+        http.client.RemoteDisconnected,
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
         json.JSONDecodeError,
@@ -1866,7 +1868,11 @@ def enrich_cn_summaries(
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(translate_item, item) for item in items]
         for future in concurrent.futures.as_completed(futures):
-            item, translated_summary, translated_title, summary_is_just_title = future.result()
+            try:
+                item, translated_summary, translated_title, summary_is_just_title = future.result()
+            except Exception as exc:
+                diagnostics.append(f"翻译线程失败，已回退: {exc}")
+                continue
             # 如果摘要来源就是标题，cn_summary 置空（避免摘要=标题的重复）
             if summary_is_just_title:
                 item.cn_summary = ""
