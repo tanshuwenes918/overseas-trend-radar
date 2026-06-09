@@ -85,10 +85,10 @@ SECTION_LIMITS = {
 
 SECTION_MIN_BUSINESS_SCORES = {
     "head_releases": 3.0,
-    "music_ai_industry": 6.0,
-    "social_trends": 6.0,
-    "culture_art": 5.0,
-    "politics": 5.0,
+    "music_ai_industry": 4.2,
+    "social_trends": 3.2,
+    "culture_art": 2.4,
+    "politics": 3.8,
 }
 
 
@@ -369,6 +369,62 @@ LOW_VALUE_KEYWORDS = [
     "box office",
     "soccer transfer",
     "stock market",
+    "wordle",
+    "crossword",
+]
+
+
+SOCIAL_FUN_KEYWORDS = [
+    "viral",
+    "meme",
+    "reaction",
+    "debate",
+    "discourse",
+    "fan edit",
+    "fandom",
+    "stan",
+    "parody",
+    "joke",
+    "easter egg",
+    "trend",
+    "challenge",
+    "remix",
+]
+
+
+CULTURE_FUN_KEYWORDS = [
+    "film",
+    "movie",
+    "tv",
+    "series",
+    "trailer",
+    "festival",
+    "art",
+    "museum",
+    "exhibition",
+    "documentary",
+    "animation",
+    "youth culture",
+    "fashion",
+    "visual",
+]
+
+
+CONTENT_NOISE_MARKERS = [
+    "skip to main content",
+    "jump to content",
+    "open navigation menu",
+    "newsletter",
+    "search search",
+    "menu menu",
+    "javascript",
+    "your browser appears to have javascript disabled",
+    "access to this page has been denied",
+    "$refs.firstmenuitem.focus",
+    "crossword",
+    "wordle",
+    "sign up",
+    "open menu",
 ]
 
 
@@ -562,16 +618,6 @@ FEED_SOURCES = [
         include_keywords=tuple(SOCIAL_KEYWORDS),
     ),
     FeedSource(
-        key="mashable",
-        name="Mashable",
-        url="https://mashable.com/feeds/rss/all",
-        section="social_trends",
-        max_age_days=3,
-        max_items=3,
-        priority=78,
-        include_keywords=tuple(SOCIAL_KEYWORDS),
-    ),
-    FeedSource(
         key="variety_film",
         name="Variety Film",
         url="https://variety.com/v/film/feed/",
@@ -579,16 +625,6 @@ FEED_SOURCES = [
         max_age_days=2,
         max_items=3,
         priority=75,
-        include_keywords=tuple(CULTURE_KEYWORDS),
-    ),
-    FeedSource(
-        key="espn_soccer",
-        name="ESPN Soccer",
-        url="https://www.espn.com/espn/rss/soccer/news",
-        section="culture_art",
-        max_age_days=2,
-        max_items=2,
-        priority=72,
         include_keywords=tuple(CULTURE_KEYWORDS),
     ),
     FeedSource(
@@ -682,6 +718,34 @@ def save_state(state: dict[str, Any]) -> None:
     )
 
 
+def decode_web_text(raw: bytes, declared_charset: str | None = None) -> str:
+    candidates: list[str] = []
+    if declared_charset:
+        candidates.append(declared_charset)
+    candidates.extend(["utf-8", "utf-8-sig", "cp1252", "latin-1"])
+
+    seen: set[str] = set()
+    ranked: list[tuple[tuple[int, int, int], str]] = []
+    for encoding in candidates:
+        normalized = encoding.lower().strip()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            text = raw.decode(normalized, errors="replace")
+        except LookupError:
+            continue
+        mojibake_penalty = sum(text.count(marker) for marker in ("鈥", "锟", "Ã", "â", "Â"))
+        replacement_penalty = text.count("\ufffd")
+        cjk_bonus = -len(re.findall(r"[\u4e00-\u9fff]", text))
+        ranked.append(((mojibake_penalty, replacement_penalty, cjk_bonus), text))
+
+    if not ranked:
+        return raw.decode("utf-8", errors="replace")
+    ranked.sort(key=lambda item: item[0])
+    return ranked[0][1]
+
+
 def fetch_text(url: str, timeout: int = 8) -> str:
     request = urllib.request.Request(
         url,
@@ -694,7 +758,7 @@ def fetch_text(url: str, timeout: int = 8) -> str:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             raw = response.read()
-            return raw.decode(charset, errors="replace")
+            return decode_web_text(raw, charset)
     except urllib.error.URLError:
         result = subprocess.run(
             [
@@ -712,7 +776,7 @@ def fetch_text(url: str, timeout: int = 8) -> str:
             timeout=timeout,
             check=True,
         )
-        return result.stdout.decode("utf-8", errors="replace")
+        return decode_web_text(result.stdout, "utf-8")
 
 
 def post_json(
@@ -891,6 +955,10 @@ def normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text or ""))
+
+
 def keyword_matches(text: str, keyword: str) -> bool:
     normalized = normalize_whitespace(text).lower()
     normalized_keyword = normalize_whitespace(keyword).lower()
@@ -984,7 +1052,30 @@ def first_sentence(text: str, max_len: int = 240) -> str:
     return sentence[: max_len - 1].rstrip() + "…"
 
 
-def text_for_translation(item: NewsItem) -> str:
+def is_noisy_content(text: str) -> bool:
+    lowered = normalize_whitespace(text).lower()
+    if not lowered:
+        return False
+    if contains_any(lowered, CONTENT_NOISE_MARKERS):
+        return True
+    if lowered.count("menu") >= 2 or lowered.count("search") >= 2:
+        return True
+    return False
+
+
+def summary_source_text(item: NewsItem) -> str:
+    if item.article_excerpt:
+        excerpt = first_sentence(item.article_excerpt, max_len=360)
+        if excerpt and not is_noisy_content(excerpt):
+            return excerpt
+    if item.summary:
+        summary = first_sentence(item.summary, max_len=280)
+        if summary and not is_noisy_content(summary):
+            return summary
+    return item.title
+
+
+def title_source_text(item: NewsItem) -> str:
     return item.title
 
 
@@ -1193,28 +1284,45 @@ def enrich_cn_summaries(
     for section_items in sections.values():
         items.extend(section_items)
 
-    def translate_item(item: NewsItem) -> tuple[NewsItem, str]:
+    def translate_item(item: NewsItem) -> tuple[NewsItem, str, str]:
         if ENGLISH_OUTPUT_MODE:
-            return item, item.title
-        source_text = text_for_translation(item)
-        translated = translate_text_to_zh(
-            source_text,
+            return item, item.title, item.title
+        summary_text = summary_source_text(item)
+        translated_summary = translate_text_to_zh(
+            summary_text,
             state=state,
             diagnostics=diagnostics,
-            cache_namespace=item.section,
+            cache_namespace=f"{item.section}:summary",
             record_errors=False,
         )
-        if translated == source_text:
-            translated = heuristic_cn_summary(item)
-        return item, translated
+        if translated_summary == summary_text and not has_cjk(summary_text):
+            translated_summary = heuristic_cn_summary(item)
+
+        title_text = title_source_text(item)
+        translated_title = translate_text_to_zh(
+            title_text,
+            state=state,
+            diagnostics=diagnostics,
+            cache_namespace=f"{item.section}:title",
+            record_errors=False,
+        )
+        if translated_title == title_text and not has_cjk(title_text):
+            translated_title = heuristic_cn_summary(item)
+        return item, translated_summary, translated_title
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(translate_item, item) for item in items]
         for future in concurrent.futures.as_completed(futures):
-            item, translated = future.result()
-            item.cn_summary = translated
+            item, translated_summary, translated_title = future.result()
+            item.cn_summary = trim_title(
+                translated_summary if has_cjk(translated_summary) else heuristic_cn_summary(item),
+                120,
+            )
             if not item.cn_title:
-                item.cn_title = translated
+                item.cn_title = trim_title(
+                    translated_title if has_cjk(translated_title) else heuristic_cn_summary(item),
+                    64,
+                )
 
 
 def fetch_article_excerpt(url: str, state: dict[str, Any], diagnostics: list[str]) -> str:
@@ -1333,11 +1441,11 @@ def enrich_items_with_llm(
     if not items:
         return
 
+    enrich_article_excerpts(sections, state, diagnostics)
     enrich_cn_summaries(sections, state, diagnostics)
     if not llm_is_configured():
         return
 
-    enrich_article_excerpts(sections, state, diagnostics)
     payload_items: list[dict[str, Any]] = []
     for index, item in enumerate(items, start=1):
         payload_items.append(
@@ -1391,9 +1499,8 @@ def enrich_items_with_llm(
         if not item:
             continue
         item.cn_title = normalize_whitespace(enriched.get("cn_title", "")) or item.cn_title or item.title
-        item.cn_summary = (
-            normalize_whitespace(enriched.get("summary_zh", "")) or item.cn_summary or heuristic_cn_summary(item)
-        )
+        candidate_summary = normalize_whitespace(enriched.get("summary_zh", "")) or item.cn_summary or heuristic_cn_summary(item)
+        item.cn_summary = candidate_summary if has_cjk(candidate_summary) else heuristic_cn_summary(item)
         item.why_it_matters = normalize_whitespace(enriched.get("why_it_matters", ""))
         item.market_hint = normalize_whitespace(enriched.get("market_hint", ""))
         item.action_hint = normalize_whitespace(enriched.get("action_hint", ""))
@@ -1473,7 +1580,7 @@ def editorial_select_sections(
                 "section_title": SECTION_TITLES.get(item.section, item.section),
                 "source": item.source_name,
                 "title": item.title,
-                "summary": item.cn_summary or item.summary,
+                "summary": item.cn_summary if has_cjk(item.cn_summary) else heuristic_cn_summary(item),
                 "score": round(item.score, 2),
                 "business_score": round(item.business_score, 2),
                 "score_reasons": item.score_reasons or [],
@@ -1534,10 +1641,10 @@ def editorial_select_sections(
         seen_links.add(link_key)
         item.section = section
         item.cn_title = trim_title(normalize_whitespace(str(entry.get("cn_title", ""))) or display_item_title(item), 70)
-        item.cn_summary = trim_title(
-            normalize_whitespace(str(entry.get("summary_zh", ""))) or item.cn_summary or heuristic_cn_summary(item),
-            140,
-        )
+        summary_text = normalize_whitespace(str(entry.get("summary_zh", ""))) or item.cn_summary or heuristic_cn_summary(item)
+        if not has_cjk(summary_text):
+            summary_text = heuristic_cn_summary(item)
+        item.cn_summary = trim_title(summary_text, 96)
         refined[section].append(item)
 
     refined = enforce_report_limits(refined)
@@ -1627,11 +1734,17 @@ def business_relevance_score(section: str, text: str) -> tuple[float, list[str]]
         ):
             score += 4.0
             reasons.append("短内容传播")
+        if contains_any(lowered, SOCIAL_FUN_KEYWORDS):
+            score += 2.2
+            reasons.append("可玩社媒话题")
 
     if section == "culture_art":
         if contains_any(lowered, ("soundtrack", "film score", "composer", "music video", "concert film", "musical", "song")):
             score += 4.0
             reasons.append("影音音乐联动")
+        if contains_any(lowered, CULTURE_FUN_KEYWORDS):
+            score += 2.8
+            reasons.append("文化借势潜力")
 
     if section == "politics":
         if contains_any(lowered, ("ai", "copyright", "licensing", "platform", "tiktok", "youtube", "trade", "tariff")):
@@ -1650,20 +1763,6 @@ def passes_business_gate(section: str, text: str, business_score: float) -> bool
     min_score = SECTION_MIN_BUSINESS_SCORES.get(section, 5.0)
     if business_score < min_score:
         return False
-    if section == "culture_art":
-        return contains_any(
-            text,
-            (
-                "music",
-                "song",
-                "soundtrack",
-                "film score",
-                "composer",
-                "music video",
-                "musical",
-                "ai",
-            ),
-        )
     if section == "politics":
         return contains_any(
             text,
@@ -1680,7 +1779,49 @@ def passes_business_gate(section: str, text: str, business_score: float) -> bool
             ),
         )
     if section == "social_trends":
-        return contains_any(text, ("music", "song", "sound", "audio", "dance", "remix", "creator", "ai"))
+        return contains_any(
+            text,
+            (
+                "music",
+                "song",
+                "sound",
+                "audio",
+                "dance",
+                "remix",
+                "creator",
+                "ai",
+                "viral",
+                "meme",
+                "reaction",
+                "debate",
+                "fandom",
+                "parody",
+                "easter egg",
+            ),
+        )
+    if section == "culture_art":
+        return contains_any(
+            text,
+            (
+                "music",
+                "song",
+                "soundtrack",
+                "film score",
+                "composer",
+                "music video",
+                "musical",
+                "film",
+                "movie",
+                "tv",
+                "trailer",
+                "festival",
+                "art",
+                "museum",
+                "exhibition",
+                "documentary",
+                "visual",
+            ),
+        )
     return True
 
 
@@ -1810,7 +1951,7 @@ def filter_items_for_source(
 
         full_text = f"{title} {summary}"
         include_text = (
-            title
+            full_text
             if source.section in {"social_trends", "music_ai_industry"} or source.key.endswith("_head_release")
             else full_text
         )
@@ -1823,9 +1964,9 @@ def filter_items_for_source(
             continue
         if source.key == "billboard_head_release" and "/music/" not in link:
             continue
-        if source.key == "mashable" and not contains_any(title, source.include_keywords):
+        if source.key == "mashable" and not contains_any(full_text, source.include_keywords):
             continue
-        if source.key == "mbw" and not contains_any(title, source.include_keywords):
+        if source.key == "mbw" and not contains_any(full_text, source.include_keywords):
             continue
         if source.key.endswith("_head_release") and contains_any(
             full_text,
@@ -2204,18 +2345,18 @@ def display_item_title(item: NewsItem) -> str:
 
 
 def markdown_source(item: NewsItem) -> str:
-    source = normalize_whitespace(item.source_name)
-    if item.link:
-        return f"[{source}]({item.link})"
-    return source
+    return normalize_whitespace(item.source_name)
 
 
 def concise_item_summary(item: NewsItem) -> str:
     summary = normalize_whitespace(item.cn_summary or heuristic_cn_summary(item))
+    if not has_cjk(summary):
+        summary = heuristic_cn_summary(item)
     title = display_item_title(item)
     if summary == title:
-        summary = normalize_whitespace(item.summary)
-    summary = trim_title(summary, 130)
+        fallback_source = summary_source_text(item)
+        summary = trim_title(fallback_source, 72) if has_cjk(fallback_source) else heuristic_cn_summary(item)
+    summary = trim_title(summary, 72)
     if not summary and item.published_at:
         summary = f"{format_date_short(item.published_at.date())} 发布"
     return summary
@@ -2262,7 +2403,7 @@ def infer_social_stage(item: NewsItem) -> str:
 
 
 def section_item_lines(item: NewsItem, mode: str) -> list[str]:
-    title = trim_title(display_item_title(item), 72)
+    title = trim_title(display_item_title(item), 48)
     summary = concise_item_summary(item)
     if summary:
         return [f"• **{title}** — {summary} ({markdown_source(item)})"]

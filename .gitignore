@@ -1,5 +1,14 @@
 __pycache__/
+*.pyc
 data/webhook.txt
 data/last_report.md
 data/last_card.json
 data/state.json
+data/raw_candidates.json
+data/filtered_candidates.json
+data/scored_candidates.json
+data/final_selected.json
+data/llm_selected.json
+data/quality_errors.json
+run_local.secrets.ps1
+local.env.ps1

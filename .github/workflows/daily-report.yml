@@ -76,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: report-output
-          retention-days: 14
+          retention-days: 3
           path: |
             data/last_report.md
             data/last_card.json
