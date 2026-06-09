@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -61,6 +61,7 @@ SECTION_TITLES = {
     "social_trends": "社媒热点",
     "culture_art": "文化·艺术界",
     "politics": "国际政坛",
+    "ops_suggestions": "运营建议",
 }
 
 
@@ -71,24 +72,26 @@ REPORT_SECTION_ORDER = [
     "culture_art",
     "politics",
     "holiday_events",
+    "ops_suggestions",
 ]
 
 
 SECTION_LIMITS = {
     "head_releases": 5,
     "music_ai_industry": 4,
-    "social_trends": 4,
+    "social_trends": 5,
     "culture_art": 3,
-    "politics": 3,
+    "politics": 4,
+    "ops_suggestions": 0,  # 由 generate_action_plan 填充，不走 RSS 通道
 }
 
 
 SECTION_MIN_BUSINESS_SCORES = {
     "head_releases": 3.0,
     "music_ai_industry": 4.2,
-    "social_trends": 3.2,
+    "social_trends": 2.0,  # 从 3.2 降低，允许更多社媒事件
     "culture_art": 2.4,
-    "politics": 3.8,
+    "politics": 0.0,  # 政治新闻直接放行，不要求业务相关
 }
 
 
@@ -104,6 +107,48 @@ COUNTRY_NAMES = {
     "ID": "印度尼西亚",
     "PH": "菲律宾",
     "MY": "马来西亚",
+    "US": "美国",
+    "CA": "加拿大",
+    "AU": "澳大利亚",
+    "NZ": "新西兰",
+    "JP": "日本",
+    "KR": "韩国",
+    "IN": "印度",
+    "TH": "泰国",
+    "VN": "越南",
+    "SG": "新加坡",
+    "BR": "巴西",
+    "MX": "墨西哥",
+    "AR": "阿根廷",
+    "CO": "哥伦比亚",
+    "CL": "智利",
+    "PE": "秘鲁",
+    "NG": "尼日利亚",
+    "ZA": "南非",
+    "EG": "埃及",
+    "KE": "肯尼亚",
+    "GH": "加纳",
+    "SA": "沙特阿拉伯",
+    "AE": "阿联酋",
+    "TR": "土耳其",
+    "PL": "波兰",
+    "NL": "荷兰",
+    "SE": "瑞典",
+    "NO": "挪威",
+    "DK": "丹麦",
+    "FI": "芬兰",
+    "PT": "葡萄牙",
+    "UA": "乌克兰",
+    "RO": "罗马尼亚",
+    "HU": "匈牙利",
+    "CZ": "捷克",
+    "AT": "奥地利",
+    "CH": "瑞士",
+    "BE": "比利时",
+    "GR": "希腊",
+    "IL": "以色列",
+    "PK": "巴基斯坦",
+    "BD": "孟加拉国",
 }
 
 
@@ -221,6 +266,25 @@ SOCIAL_KEYWORDS = [
     "stan",
     "reels",
     "shorts",
+    "celebrity",
+    "concert",
+    "drama",
+    "beef",
+    "feud",
+    "cancel",
+    "controversy",
+    "backlash",
+    "reaction",
+    "reddit",
+    "twitter",
+    "x.com",
+    "going viral",
+    "fan",
+    "debate",
+    "discourse",
+    "cringe",
+    "wholesome",
+    "ratio",
 ]
 
 AI_INDUSTRY_KEYWORDS = [
@@ -257,6 +321,47 @@ POLITICS_KEYWORDS = [
     "nato",
     "white house",
     "eu",
+    "minister",
+    "government",
+    "policy",
+    "diplomacy",
+    "summit",
+    "sanctions",
+    "military",
+    "conflict",
+    "ceasefire",
+    "protest",
+    "referendum",
+    "vote",
+    "law",
+    "legislation",
+    "court",
+    "ruling",
+    "treaty",
+    "un",
+    "united nations",
+    "crisis",
+    "invasion",
+    "nuclear",
+    "allies",
+    "bilateral",
+    "geopolitics",
+    "cabinet",
+    "governor",
+    "mayor",
+    "diplomat",
+    "foreign",
+    "g7",
+    "g20",
+    "imf",
+    "world bank",
+    "opec",
+    "trump",
+    "biden",
+    "macron",
+    "modi",
+    "putin",
+    "xi",
 ]
 
 CULTURE_KEYWORDS = [
@@ -429,6 +534,7 @@ CONTENT_NOISE_MARKERS = [
 
 
 HOLIDAY_VALUE_KEYWORDS = [
+    # 原有节日
     "father",
     "mother",
     "valentine",
@@ -446,6 +552,74 @@ HOLIDAY_VALUE_KEYWORDS = [
     "eid",
     "ramadan",
     "diwali",
+    # 新增：各类解放日/独立日/民族节日
+    "independence",
+    "liberation",
+    "national",
+    "republic",
+    "revolution",
+    "freedom",
+    "unity",
+    "solidarity",
+    "remembrance",
+    "memorial",
+    "victory",
+    "armistice",
+    "reconciliation",
+    # 新增：宗教与文化节日
+    "holi",
+    "dussehra",
+    "pongal",
+    "vesak",
+    "buddha",
+    "eid al",
+    "muharram",
+    "mawlid",
+    "rosh hashana",
+    "yom kippur",
+    "hanukkah",
+    "passover",
+    "pentecost",
+    "ascension",
+    "corpus christi",
+    "assumption",
+    "all saints",
+    "all souls",
+    "epiphany",
+    "orthodox",
+    "lantern",
+    "songkran",
+    "thaipusam",
+    "wesak",
+    "loy krathong",
+    "nyepi",
+    "galungan",
+    "waisak",
+    "onam",
+    "pongal",
+    "vijayadashami",
+    "navaratri",
+    # 新增：体育/文化大事
+    "world cup",
+    "olympic",
+    "carnival",
+    "mardi gras",
+    "oktoberfest",
+    "bonfire",
+    "pride",
+    "heritage",
+    "culture",
+    "arts",
+    "spring",
+    "harvest",
+    "autumn",
+    "summer",
+    "winter",
+    "festival",
+    "bank holiday",
+    "public holiday",
+    "day off",
+    "holiday",
 ]
 
 
@@ -633,7 +807,7 @@ FEED_SOURCES = [
         url="https://thehill.com/feed/?feed=partnerfeed-news-feed&format=rss",
         section="politics",
         max_age_days=2,
-        max_items=2,
+        max_items=3,
         priority=82,
         include_keywords=tuple(POLITICS_KEYWORDS),
     ),
@@ -643,9 +817,109 @@ FEED_SOURCES = [
         url="https://feeds.npr.org/1001/rss.xml",
         section="politics",
         max_age_days=2,
-        max_items=2,
+        max_items=3,
         priority=80,
         include_keywords=tuple(POLITICS_KEYWORDS),
+    ),
+    FeedSource(
+        key="reuters_world",
+        name="Reuters World",
+        url="https://feeds.reuters.com/reuters/worldNews",
+        section="politics",
+        max_age_days=2,
+        max_items=4,
+        priority=90,
+        include_keywords=tuple(POLITICS_KEYWORDS),
+    ),
+    FeedSource(
+        key="ap_politics",
+        name="AP News",
+        url="https://feeds.apnews.com/rss/apf-politics",
+        section="politics",
+        max_age_days=2,
+        max_items=3,
+        priority=88,
+        include_keywords=tuple(POLITICS_KEYWORDS),
+    ),
+    FeedSource(
+        key="bbc_world",
+        name="BBC World",
+        url="https://feeds.bbci.co.uk/news/world/rss.xml",
+        section="politics",
+        max_age_days=2,
+        max_items=4,
+        priority=87,
+        include_keywords=tuple(POLITICS_KEYWORDS),
+    ),
+    FeedSource(
+        key="guardian_world",
+        name="The Guardian World",
+        url="https://www.theguardian.com/world/rss",
+        section="politics",
+        max_age_days=2,
+        max_items=3,
+        priority=82,
+        include_keywords=tuple(POLITICS_KEYWORDS),
+    ),
+    # ── 社媒热点新信源 ──────────────────────────────────────
+    FeedSource(
+        key="buzzfeed_news",
+        name="BuzzFeed News",
+        url="https://www.buzzfeed.com/celeb.xml",
+        section="social_trends",
+        max_age_days=2,
+        max_items=3,
+        priority=78,
+        include_keywords=tuple(SOCIAL_KEYWORDS),
+    ),
+    FeedSource(
+        key="mashable_social",
+        name="Mashable",
+        url="https://mashable.com/feeds/rss/all",
+        section="social_trends",
+        max_age_days=2,
+        max_items=3,
+        priority=76,
+        include_keywords=tuple(SOCIAL_KEYWORDS),
+    ),
+    FeedSource(
+        key="variety_digital",
+        name="Variety Digital",
+        url="https://variety.com/v/digital/feed/",
+        section="social_trends",
+        max_age_days=2,
+        max_items=3,
+        priority=74,
+        include_keywords=tuple(SOCIAL_KEYWORDS),
+    ),
+    FeedSource(
+        key="reddit_popular",
+        name="Reddit r/popular",
+        url="https://www.reddit.com/r/popular/.rss",
+        section="social_trends",
+        max_age_days=1,
+        max_items=4,
+        priority=72,
+        include_keywords=tuple(SOCIAL_KEYWORDS),
+    ),
+    FeedSource(
+        key="knowyourmeme",
+        name="Know Your Meme",
+        url="https://knowyourmeme.com/memes/all.rss",
+        section="social_trends",
+        max_age_days=2,
+        max_items=3,
+        priority=80,
+    ),
+    FeedSource(
+        key="tmz",
+        name="TMZ",
+        url="https://www.tmz.com/rss.xml",
+        section="social_trends",
+        max_age_days=1,
+        max_items=3,
+        priority=70,
+        include_keywords=tuple(SOCIAL_KEYWORDS),
     ),
 ]
 
@@ -675,7 +949,16 @@ PRICE_TRACKERS = [
 ]
 
 
-HOLIDAY_COUNTRIES = ["GB", "FR", "DE", "IT", "ES", "ID", "PH", "MY"]
+HOLIDAY_COUNTRIES = [
+    "US", "GB", "FR", "DE", "IT", "ES", "CA", "AU", "NZ",
+    "JP", "KR", "IN", "TH", "VN", "SG", "ID", "PH", "MY",
+    "BR", "MX", "AR", "CO", "CL", "PE",
+    "NG", "ZA", "EG", "KE", "GH",
+    "SA", "AE", "TR", "IL",
+    "PL", "NL", "SE", "NO", "DK", "FI", "PT", "UA", "RO",
+    "HU", "CZ", "AT", "CH", "BE", "GR",
+    "PK", "BD",
+]
 
 
 def ensure_data_dir() -> None:
@@ -1063,15 +1346,30 @@ def is_noisy_content(text: str) -> bool:
     return False
 
 
+def strip_source_trail(text: str, source_name: str) -> str:
+    """清除摘要末尾的信源名残留，如 '- Music Business Worldwide Music Business ...'"""
+    if not source_name:
+        return text
+    # 匹配 " - SourceName" 或 " — SourceName" 及其后重复的信源名
+    pattern = r"\s*[-—]\s*" + re.escape(source_name) + r"\s*(?:" + re.escape(source_name) + r"\s*)*(?:\S*\s*){0,5}$"
+    cleaned = re.sub(pattern, "", text, flags=re.I).strip()
+    # 如果没匹配到完整模式，尝试简单清除 " - SourceName" 尾部
+    if cleaned == text and source_name in text:
+        simple = re.sub(r"\s*[-—]\s*" + re.escape(source_name) + r".*$", "", text, flags=re.I).strip()
+        if simple and len(simple) > len(text) * 0.3:
+            cleaned = simple
+    return cleaned if cleaned else text
+
+
 def summary_source_text(item: NewsItem) -> str:
     if item.article_excerpt:
         excerpt = first_sentence(item.article_excerpt, max_len=360)
         if excerpt and not is_noisy_content(excerpt):
-            return excerpt
+            return strip_source_trail(excerpt, item.source_name)
     if item.summary:
         summary = first_sentence(item.summary, max_len=280)
         if summary and not is_noisy_content(summary):
-            return summary
+            return strip_source_trail(summary, item.source_name)
     return item.title
 
 
@@ -1284,10 +1582,12 @@ def enrich_cn_summaries(
     for section_items in sections.values():
         items.extend(section_items)
 
-    def translate_item(item: NewsItem) -> tuple[NewsItem, str, str]:
+    def translate_item(item: NewsItem) -> tuple[NewsItem, str, str, bool]:
         if ENGLISH_OUTPUT_MODE:
-            return item, item.title, item.title
+            return item, item.title, item.title, False
         summary_text = summary_source_text(item)
+        # 如果摘要来源就是标题本身，标记为"无独立摘要"
+        summary_is_just_title = (summary_text == item.title)
         translated_summary = translate_text_to_zh(
             summary_text,
             state=state,
@@ -1308,16 +1608,20 @@ def enrich_cn_summaries(
         )
         if translated_title == title_text and not has_cjk(title_text):
             translated_title = heuristic_cn_summary(item)
-        return item, translated_summary, translated_title
+        return item, translated_summary, translated_title, summary_is_just_title
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(translate_item, item) for item in items]
         for future in concurrent.futures.as_completed(futures):
-            item, translated_summary, translated_title = future.result()
-            item.cn_summary = trim_title(
-                translated_summary if has_cjk(translated_summary) else heuristic_cn_summary(item),
-                120,
-            )
+            item, translated_summary, translated_title, summary_is_just_title = future.result()
+            # 如果摘要来源就是标题，cn_summary 置空（避免摘要=标题的重复）
+            if summary_is_just_title:
+                item.cn_summary = ""
+            else:
+                item.cn_summary = trim_title(
+                    translated_summary if has_cjk(translated_summary) else "",
+                    120,
+                )
             if not item.cn_title:
                 item.cn_title = trim_title(
                     translated_title if has_cjk(translated_title) else heuristic_cn_summary(item),
@@ -1465,7 +1769,8 @@ def enrich_items_with_llm(
     system_prompt = (
         "你是海外音乐与内容运营分析师。"
         "请把输入新闻加工成适合中国团队阅读的运营情报，输出简体中文 JSON。"
-        "每条新闻只给出更完整的中文标题和 60 到 110 字的一行摘要，摘要要包含关键时间、数据、平台、作品或影响点。"
+        "每条新闻只给出更完整的中文标题和 60 到 110 字的一行摘要。"
+        "摘要必须补充标题未涵盖的关键信息（时间、数据、平台、作品、影响点），不能重复或复述标题内容。"
         "不要写运营意义、可执行动作或模板化建议。"
         "不要杜撰未给出的事实，不确定就保守概括。"
     )
@@ -1499,8 +1804,11 @@ def enrich_items_with_llm(
         if not item:
             continue
         item.cn_title = normalize_whitespace(enriched.get("cn_title", "")) or item.cn_title or item.title
-        candidate_summary = normalize_whitespace(enriched.get("summary_zh", "")) or item.cn_summary or heuristic_cn_summary(item)
-        item.cn_summary = candidate_summary if has_cjk(candidate_summary) else heuristic_cn_summary(item)
+        candidate_summary = normalize_whitespace(enriched.get("summary_zh", "")) or item.cn_summary
+        # LLM 摘要与标题重复时置空，不回退到 heuristic_cn_summary
+        if candidate_summary and item.cn_title and candidate_summary == item.cn_title:
+            candidate_summary = ""
+        item.cn_summary = candidate_summary if has_cjk(candidate_summary) else ""
         item.why_it_matters = normalize_whitespace(enriched.get("why_it_matters", ""))
         item.market_hint = normalize_whitespace(enriched.get("market_hint", ""))
         item.action_hint = normalize_whitespace(enriched.get("action_hint", ""))
@@ -1508,7 +1816,7 @@ def enrich_items_with_llm(
 
 
 def empty_report_sections() -> dict[str, list[NewsItem]]:
-    return {section: [] for section in SECTION_TITLES if section != "holiday_events"}
+    return {section: [] for section in SECTION_TITLES if section not in {"holiday_events", "ops_suggestions"}}
 
 
 def enforce_report_limits(sections: dict[str, list[NewsItem]]) -> dict[str, list[NewsItem]]:
@@ -1528,7 +1836,7 @@ def enforce_report_limits(sections: dict[str, list[NewsItem]]) -> dict[str, list
     all_items: list[tuple[str, NewsItem]] = [
         (section, item)
         for section in REPORT_SECTION_ORDER
-        if section != "holiday_events"
+        if section not in {"holiday_events", "ops_suggestions"}
         for item in limited.get(section, [])
     ]
     if len(all_items) <= MAX_REPORT_ITEMS:
@@ -1562,7 +1870,7 @@ def editorial_select_sections(
 
     candidate_items: list[NewsItem] = []
     for section in REPORT_SECTION_ORDER:
-        if section == "holiday_events":
+        if section in {"holiday_events", "ops_suggestions"}:
             continue
         candidate_items.extend(sections.get(section, []))
     if not candidate_items:
@@ -1623,7 +1931,7 @@ def editorial_select_sections(
 
     refined = empty_report_sections()
     seen_links: set[str] = set()
-    allowed_sections = {section for section in REPORT_SECTION_ORDER if section != "holiday_events"}
+    allowed_sections = {section for section in REPORT_SECTION_ORDER if section not in {"holiday_events", "ops_suggestions"}}
     for entry in selected:
         if not isinstance(entry, dict):
             continue
@@ -1641,9 +1949,12 @@ def editorial_select_sections(
         seen_links.add(link_key)
         item.section = section
         item.cn_title = trim_title(normalize_whitespace(str(entry.get("cn_title", ""))) or display_item_title(item), 70)
-        summary_text = normalize_whitespace(str(entry.get("summary_zh", ""))) or item.cn_summary or heuristic_cn_summary(item)
+        summary_text = normalize_whitespace(str(entry.get("summary_zh", ""))) or item.cn_summary
         if not has_cjk(summary_text):
-            summary_text = heuristic_cn_summary(item)
+            summary_text = ""
+        # 摘要与标题重复时置空
+        if summary_text and item.cn_title and summary_text == item.cn_title:
+            summary_text = ""
         item.cn_summary = trim_title(summary_text, 96)
         refined[section].append(item)
 
@@ -1657,7 +1968,7 @@ def editorial_select_sections(
         audit["llm_selected"] = [
             audit_news_item(item)
             for section in REPORT_SECTION_ORDER
-            if section != "holiday_events"
+            if section not in {"holiday_events", "ops_suggestions"}
             for item in refined.get(section, [])
         ]
     return refined
@@ -1670,9 +1981,60 @@ def translate_holiday_name(
 ) -> str:
     holiday_map = {
         "Early May Bank Holiday": "五月初银行假日",
+        "Spring Bank Holiday": "春季银行假日",
+        "Summer Bank Holiday": "夏季银行假日",
         "Truman Day": "杜鲁门日",
         "Victoire 1945": "1945 胜利纪念日",
+        "Victory in Europe Day": "欧洲胜利日",
         "Fiesta de la Comunidad de Madrid": "马德里自治区日",
+        "Independence Day": "独立日",
+        "Christmas Day": "圣诞节",
+        "Christmas Eve": "圣诞夜",
+        "New Year's Day": "元旦",
+        "New Year's Eve": "跨年夜",
+        "Good Friday": "耶稣受难日",
+        "Easter Monday": "复活节星期一",
+        "Easter Sunday": "复活节",
+        "Labour Day": "劳动节",
+        "May Day": "五一节",
+        "Thanksgiving": "感恩节",
+        "Thanksgiving Day": "感恩节",
+        "Valentine's Day": "情人节",
+        "Halloween": "万圣节",
+        "All Saints' Day": "万圣节",
+        "All Souls' Day": "万灵节",
+        "St. Patrick's Day": "圣帕特里克节",
+        "Martin Luther King Jr. Day": "马丁·路德·金纪念日",
+        "Presidents' Day": "总统日",
+        "Memorial Day": "阵亡将士纪念日",
+        "Veterans Day": "退伍军人节",
+        "Columbus Day": "哥伦布日",
+        "Juneteenth": "六月节",
+        "Canada Day": "加拿大日",
+        "Bastille Day": "法国国庆日",
+        "German Unity Day": "德国统一日",
+        "Day of German Unity": "德国统一日",
+        "National Day": "国庆日",
+        "Republic Day": "共和国日",
+        " Liberation Day": "解放日",
+        "Epiphany": "主显节",
+        "Ascension Day": "耶稣升天节",
+        "Whit Monday": "圣灵降临节星期一",
+        "Corpus Christi": "基督圣体圣血节",
+        "Assumption of Mary": "圣母升天节",
+        "Immaculate Conception": "圣母无染原罪节",
+        "Feast of the Immaculate Conception": "圣母无染原罪节",
+        "Day of the Dead": "亡灵节",
+        "Día de los Muertos": "亡灵节",
+        "Día de la Raza": "种族日",
+        "Día de La Rioja": "里奥哈日",
+        "Día de la Constitución": "宪法日",
+        "Boxing Day": "节礼日",
+        "Remembrance Day": "阵亡将士纪念日",
+        "Armistice Day": "停战日",
+        "St. Stephen's Day": "圣斯蒂芬日",
+        "Black Friday": "黑色星期五",
+        "Cyber Monday": "网络星期一",
     }
     if name in holiday_map:
         return holiday_map[name]
@@ -1683,7 +2045,10 @@ def translate_holiday_name(
         cache_namespace="holiday",
         record_errors=False,
     )
-    return translated if translated != name else name
+    # 只有真正翻译出中文时才返回翻译结果，否则返回原名
+    if translated != name and has_cjk(translated):
+        return translated
+    return name
 
 
 def contains_any(text: str, keywords: tuple[str, ...] | list[str]) -> bool:
@@ -1764,21 +2129,12 @@ def passes_business_gate(section: str, text: str, business_score: float) -> bool
     if business_score < min_score:
         return False
     if section == "politics":
-        return contains_any(
-            text,
-            (
-                "ai",
-                "copyright",
-                "licensing",
-                "platform",
-                "tiktok",
-                "youtube",
-                "trade",
-                "tariff",
-                "streaming",
-            ),
-        )
+        # 政治新闻不要求与业务强绑定，只要通过 min_score 即可入选
+        return True
     if section == "social_trends":
+        # 高分纯病毒事件（business_score≥7.5）直接通过，无需命中特定词
+        if business_score >= 7.5:
+            return True
         return contains_any(
             text,
             (
@@ -1797,6 +2153,26 @@ def passes_business_gate(section: str, text: str, business_score: float) -> bool
                 "fandom",
                 "parody",
                 "easter egg",
+                "celebrity",
+                "concert",
+                "drama",
+                "beef",
+                "feud",
+                "cancel",
+                "controversy",
+                "backlash",
+                "fan",
+                "discourse",
+                "cringe",
+                "wholesome",
+                "stan",
+                "trend",
+                "tiktok",
+                "instagram",
+                "twitter",
+                "youtube",
+                "reddit",
+                "challenge",
             ),
         )
     if section == "culture_art":
@@ -2086,7 +2462,7 @@ def fetch_section_items(
     sections: dict[str, list[NewsItem]] = {
         section: []
         for section in SECTION_TITLES
-        if section != "holiday_events"
+        if section not in {"holiday_events", "ops_suggestions"}
     }
 
     if audit is not None:
@@ -2152,7 +2528,7 @@ def fetch_holiday_items(
     state: dict[str, Any],
     diagnostics: list[str],
 ) -> dict[str, list[dict[str, Any]]]:
-    grouped_items: dict[str, list[dict[str, Any]]] = {"advance": [], "urgent": []}
+    grouped_items: dict[str, list[dict[str, Any]]] = {"today": [], "week": [], "advance": []}
 
     years = [report_date.year]
     if report_date.month >= 11:
@@ -2172,7 +2548,7 @@ def fetch_holiday_items(
             return [], f"Nager.Date {country}-{year} 抓取失败: {exc}"
         return data, None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = [
             executor.submit(fetch_country_holidays, country, year)
             for country in HOLIDAY_COUNTRIES
@@ -2187,14 +2563,30 @@ def fetch_holiday_items(
                 country = holiday.get("countryCode")
                 holiday_date = date.fromisoformat(holiday["date"])
                 days_left = (holiday_date - report_date).days
-                if not (0 <= days_left <= 5 or 25 <= days_left <= 30):
+                # 展示范围：今天(0)、未来7天、以及25-35天预警
+                if not (0 <= days_left <= 7 or 25 <= days_left <= 35):
                     continue
                 name = holiday.get("localName") or holiday.get("name")
                 english_name = holiday.get("name") or ""
                 holiday_text = f"{name} {english_name}"
-                if not contains_any(holiday_text, HOLIDAY_VALUE_KEYWORDS):
+                # 宽松过滤：只要能匹配任一关键词，或 days_left==0（今日节日必须显示）
+                if days_left > 0 and not contains_any(holiday_text, HOLIDAY_VALUE_KEYWORDS):
                     continue
-                bucket = "urgent" if days_left <= 5 else "advance"
+                if days_left == 0:
+                    bucket = "today"
+                elif days_left <= 7:
+                    bucket = "week"
+                else:
+                    bucket = "advance"
+                action = (
+                    "今天是节日当天，建议今天确认社媒祝福推文、专题页和本地化 Push。"
+                    if days_left == 0
+                    else (
+                        "今天就要确认倒计时文案、专题页封面与本地社媒发布时间。"
+                        if days_left <= 7
+                        else "适合启动节日歌单、情绪化选题和本地化物料排期。"
+                    )
+                )
                 grouped_items[bucket].append(
                     {
                         "country": country,
@@ -2204,14 +2596,10 @@ def fetch_holiday_items(
                         "english_name": english_name,
                         "date": holiday_date,
                         "days_left": days_left,
-                        "tag": "5天内提醒" if days_left <= 5 else "25-30天预警",
+                        "tag": "今日节日" if days_left == 0 else ("7天内提醒" if days_left <= 7 else "25-35天预警"),
                         "source_name": "Nager.Date",
                         "link": f"https://date.nager.at/api/v3/PublicHolidays/{holiday_date.year}/{country}",
-                        "recommended_action": (
-                            "今天就要确认倒计时文案、专题页封面与本地社媒发布时间。"
-                            if days_left <= 5
-                            else "适合启动节日歌单、情绪化选题和本地化物料排期。"
-                        ),
+                        "recommended_action": action,
                     }
                 )
 
@@ -2225,7 +2613,9 @@ def fetch_holiday_items(
                 continue
             seen.add(key)
             unique.append(item)
-        grouped_items[bucket] = unique[:2]
+        # 今日节日最多8条，近期节日最多10条，预警最多6条
+        limit = 8 if bucket == "today" else (10 if bucket == "week" else 6)
+        grouped_items[bucket] = unique[:limit]
     return grouped_items
 
 
@@ -2341,7 +2731,13 @@ def trim_title(title: str, max_len: int = 110) -> str:
 
 
 def display_item_title(item: NewsItem) -> str:
-    return normalize_whitespace(item.cn_title or item.cn_summary or item.title)
+    # 优先中文标题，其次中文摘要（比英文标题好），最后才用英文标题
+    if item.cn_title and has_cjk(item.cn_title):
+        return normalize_whitespace(item.cn_title)
+    if item.cn_summary and has_cjk(item.cn_summary):
+        return normalize_whitespace(item.cn_summary)
+    # 英文标题兜底：至少保证有内容
+    return normalize_whitespace(item.title)
 
 
 def markdown_source(item: NewsItem) -> str:
@@ -2349,17 +2745,19 @@ def markdown_source(item: NewsItem) -> str:
 
 
 def concise_item_summary(item: NewsItem) -> str:
-    summary = normalize_whitespace(item.cn_summary or heuristic_cn_summary(item))
-    if not has_cjk(summary):
-        summary = heuristic_cn_summary(item)
+    # 只使用 cn_summary（来自 DeepL 翻译或 LLM 精选）
+    # 不再回退到 heuristic_cn_summary（它只有标题，必然与标题重复）
+    summary = normalize_whitespace(item.cn_summary) if item.cn_summary else ""
+    if summary and not has_cjk(summary):
+        summary = ""
     title = display_item_title(item)
-    if summary == title:
-        fallback_source = summary_source_text(item)
-        summary = trim_title(fallback_source, 72) if has_cjk(fallback_source) else heuristic_cn_summary(item)
-    summary = trim_title(summary, 72)
-    if not summary and item.published_at:
-        summary = f"{format_date_short(item.published_at.date())} 发布"
-    return summary
+    # 摘要与标题高度重复 → 置空（宁可没有摘要，也不要重复标题）
+    if summary and title:
+        if summary == title:
+            summary = ""
+        elif len(summary) <= len(title) + 8 and (summary.startswith(title[:12]) or title.startswith(summary[:12])):
+            summary = ""
+    return trim_title(summary, 72)
 
 
 def default_why_it_matters(item: NewsItem) -> str:
@@ -2405,22 +2803,38 @@ def infer_social_stage(item: NewsItem) -> str:
 def section_item_lines(item: NewsItem, mode: str) -> list[str]:
     title = trim_title(display_item_title(item), 48)
     summary = concise_item_summary(item)
+    source = markdown_source(item)
     if summary:
-        return [f"• **{title}** — {summary} ({markdown_source(item)})"]
-    return [f"• **{title}** ({markdown_source(item)})"]
+        return [f"• **{title}** — {summary}（{source}）"]
+    return [f"• **{title}**（{source}）"]
 
 
 def holiday_group_title(bucket: str) -> str:
-    if bucket == "advance":
-        return "25-30天预警"
-    return "5天内提醒"
+    if bucket == "today":
+        return "今日节日"
+    if bucket == "week":
+        return "7天内提醒"
+    return "25-35天预警"
 
 
 def holiday_to_markdown_line(item: dict[str, Any]) -> str:
-    holiday_name = item.get("name_cn") or item["name"]
-    timing = f"{format_date_short(item['date'])} / D-{item['days_left']}"
-    action = item.get("recommended_action", "")
-    return f"• **{holiday_name}（{item['country_name']}）** — {timing}，{action} ([{item['source_name']}]({item['link']}))"
+    original_name = item["name"]
+    name_cn = item.get("name_cn") or ""
+    country = item["country_name"]
+    date_str = format_date_short(item["date"])
+    days_left = item["days_left"]
+    if days_left == 0:
+        timing = f"{date_str}（今天）"
+    elif days_left == 1:
+        timing = f"{date_str}（明天）"
+    else:
+        timing = f"{date_str}（D-{days_left}）"
+    # 同时显示原名和中文翻译（当两者不同时）
+    if name_cn and name_cn != original_name:
+        display_name = f"{original_name}（{name_cn}）"
+    else:
+        display_name = original_name
+    return f"• **{display_name}·{country}** — {timing}"
 
 
 def price_alert_to_markdown_line(item: dict[str, Any]) -> str:
@@ -2467,8 +2881,9 @@ def fallback_action_plan(
         plan["localization_actions"].append(
             f"为 {holiday['country_name']} 的 {holiday.get('name_cn') or holiday['name']} 提前准备节日歌单、封面和本地化 Push。"
         )
-    if holidays["urgent"]:
-        holiday = holidays["urgent"][0]
+    if holidays["week"] or holidays["today"]:
+        urgent_items = holidays["today"] or holidays["week"]
+        holiday = urgent_items[0]
         plan["localization_actions"].append(
             f"{holiday['country_name']} 的 {holiday.get('name_cn') or holiday['name']} 已进入 D-{holiday['days_left']}，今天就要敲定倒计时文案和上线时间。"
         )
@@ -2511,6 +2926,7 @@ def generate_action_plan(
             for item in bucket_items
         ]
         for bucket, bucket_items in holidays.items()
+        if bucket in ("today", "week", "advance")
     }
     payload = {
         "report_date": format_date_cn(report_date),
@@ -2580,8 +2996,9 @@ def build_top_signals(
                 f"平台价格：{price_alerts[0]['service']} 价格快照出现变化，适合今天检查转化文案。",
             )
         )
-    if holidays["urgent"]:
-        holiday = holidays["urgent"][0]
+    if holidays["week"] or holidays["today"]:
+        urgent_items = holidays["today"] or holidays["week"]
+        holiday = urgent_items[0]
         candidates.append(
             (
                 94.0 - holiday["days_left"],
@@ -2619,11 +3036,12 @@ def action_plan_to_markdown_lines(action_plan: dict[str, list[str]]) -> list[str
 
 def holiday_lines(holidays: dict[str, list[dict[str, Any]]]) -> list[str]:
     lines: list[str] = []
-    for bucket in ("advance", "urgent"):
+    for bucket in ("today", "week", "advance"):
         items = holidays.get(bucket, [])
         if not items:
             continue
-        lines.extend(holiday_to_markdown_line(item) for item in items)
+        lines.append(f"  {holiday_group_title(bucket)}")
+        lines.extend(f"  {holiday_to_markdown_line(item)}" for item in items)
     return lines
 
 
@@ -2632,6 +3050,7 @@ def build_card_payload(
     sections: dict[str, list[NewsItem]],
     holidays: dict[str, list[dict[str, Any]]],
     price_alerts: list[dict[str, Any]],
+    action_plan: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     report_label = format_report_date(report_dt.date())
     elements: list[dict[str, Any]] = [
@@ -2645,6 +3064,8 @@ def build_card_payload(
     ]
 
     for section in REPORT_SECTION_ORDER:
+        if section == "ops_suggestions":
+            continue  # 单独处理
         lines: list[str] = []
         if section == "holiday_events":
             lines.extend(holiday_lines(holidays))
@@ -2667,6 +3088,18 @@ def build_card_payload(
             }
         )
 
+    # 运营建议板块
+    if action_plan:
+        op_lines = action_plan_to_markdown_lines(action_plan)
+        if op_lines:
+            elements.append({"tag": "hr"})
+            elements.append(
+                {
+                    "tag": "markdown",
+                    "content": f"【{SECTION_TITLES['ops_suggestions']}】\n" + "\n".join(op_lines),
+                }
+            )
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -2686,17 +3119,20 @@ def build_console_preview(
     holidays: dict[str, list[dict[str, Any]]],
     price_alerts: list[dict[str, Any]],
     diagnostics: list[str],
+    action_plan: dict[str, list[str]] | None = None,
 ) -> str:
     blocks = [f"海外运营每日舆情播报 | {format_report_date(report_dt.date())}"]
 
     for section in REPORT_SECTION_ORDER:
+        if section == "ops_suggestions":
+            continue  # 单独处理
         blocks.append(f"\n【{SECTION_TITLES[section]}】")
         if section == "holiday_events":
             lines = holiday_lines(holidays)
             if lines:
                 blocks.extend(lines)
             else:
-                blocks.append("- 今日无高优先级节庆提醒")
+                blocks.append("- 今日无节庆信息")
             continue
         if section == "music_ai_industry":
             if sections.get(section):
@@ -2712,6 +3148,11 @@ def build_console_preview(
                 blocks.extend(section_item_lines(item, "standard"))
         else:
             blocks.append("- 今日无高优先级条目")
+
+    # 运营建议板块
+    if action_plan:
+        blocks.append(f"\n【{SECTION_TITLES['ops_suggestions']}】")
+        blocks.extend(action_plan_to_markdown_lines(action_plan))
 
     blocks.append("\n本播报内容基于海外公开信源自动抓取、初筛、复筛和总编精选生成。")
 
@@ -2729,7 +3170,7 @@ def count_report_items(
     news_count = sum(
         len(sections.get(section, []))
         for section in REPORT_SECTION_ORDER
-        if section != "holiday_events"
+        if section not in {"holiday_events", "ops_suggestions"}
     )
     holiday_count = sum(len(items) for items in holidays.values())
     return news_count + holiday_count + len(price_alerts)
@@ -2748,7 +3189,7 @@ def validate_report_quality(
         errors.append(f"条目数 {total_items} 超过上限 {MAX_REPORT_ITEMS}")
 
     for section in REPORT_SECTION_ORDER:
-        if section == "holiday_events":
+        if section in {"holiday_events", "ops_suggestions"}:
             continue
         if len(sections.get(section, [])) > SECTION_LIMITS.get(section, 3):
             errors.append(f"{SECTION_TITLES[section]} 超过板块上限")
@@ -2803,7 +3244,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_report_datetime(args: argparse.Namespace) -> datetime:
-    tz = ZoneInfo(args.timezone)
+    try:
+        tz = ZoneInfo(args.timezone)
+    except ZoneInfoNotFoundError:
+        if args.timezone == "Asia/Shanghai":
+            tz = timezone(timedelta(hours=8), name="Asia/Shanghai")
+        else:
+            raise
     if args.date:
         report_date = date.fromisoformat(args.date)
     else:
@@ -2839,10 +3286,11 @@ def main() -> int:
     enrich_items_with_llm(sections, state, diagnostics)
     price_alerts = fetch_price_alerts(report_dt, state, diagnostics)
     sections = editorial_select_sections(sections, state, diagnostics, audit=audit)
+    action_plan = generate_action_plan(report_dt.date(), sections, holidays, price_alerts, state, diagnostics)
     audit["final_selected"] = [
         audit_news_item(item)
         for section in REPORT_SECTION_ORDER
-        if section != "holiday_events"
+        if section not in {"holiday_events", "ops_suggestions"}
         for item in sections.get(section, [])
     ]
     quality_errors = validate_report_quality(sections, holidays, price_alerts)
@@ -2859,8 +3307,9 @@ def main() -> int:
         holidays=holidays,
         price_alerts=price_alerts,
         diagnostics=diagnostics if args.debug else [],
+        action_plan=action_plan,
     )
-    payload = build_card_payload(report_dt, sections, holidays, price_alerts)
+    payload = build_card_payload(report_dt, sections, holidays, price_alerts, action_plan=action_plan)
     (DATA_DIR / "last_report.md").write_text(preview, encoding="utf-8")
     (DATA_DIR / "last_card.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),

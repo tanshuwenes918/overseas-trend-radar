@@ -1,6 +1,6 @@
 param(
     [string]$ReportDate = "",
-    [string]$Model = "gpt5.4",
+    [string]$Model = "gpt-5.5",
     [string]$BaseUrl = "https://ai.860812.xyz",
     [string]$ApiKey = "",
     [string]$Timezone = "Asia/Shanghai"
@@ -24,14 +24,17 @@ if (-not $ApiKey) {
     throw "Missing API key. Pass -ApiKey or set `$env:OPENAI_API_KEY, or create ignored file run_local.secrets.ps1."
 }
 
-$bundledPython = "C:\Users\AS\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 $pythonExe = $null
-if (Test-Path $bundledPython) {
-    $pythonExe = $bundledPython
-} else {
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($pythonCmd) {
-        $pythonExe = $pythonCmd.Source
+# 优先使用系统 Python
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if ($pythonCmd) {
+    $pythonExe = $pythonCmd.Source
+}
+# 备选：Codex 内置 Python
+if (-not $pythonExe) {
+    $bundledPython = "C:\Users\AS\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+    if (Test-Path $bundledPython) {
+        $pythonExe = $bundledPython
     }
 }
 
@@ -56,6 +59,9 @@ if ($ReportDate) {
 
 Write-Host "Running local dry-run with model $Model ..." -ForegroundColor Cyan
 & $pythonExe @args
+if ($LASTEXITCODE -ne 0) {
+    throw "Local dry-run failed with exit code $LASTEXITCODE."
+}
 
 Write-Host ""
 Write-Host "Artifacts written to data/:" -ForegroundColor Green

@@ -1,5 +1,18 @@
+# ── Python ──
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── 虚拟环境 ──
+.venv/
+venv/
+env/
+
+# ── 数据产物（运行时生成） ──
 data/webhook.txt
 data/last_report.md
 data/last_card.json
@@ -10,5 +23,24 @@ data/scored_candidates.json
 data/final_selected.json
 data/llm_selected.json
 data/quality_errors.json
+
+# ── 密钥 & 本地配置 ──
 run_local.secrets.ps1
 local.env.ps1
+.env
+.env.*
+
+# ── IDE / 编辑器 ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── WorkBuddy 工作区 ──
+.workbuddy/
