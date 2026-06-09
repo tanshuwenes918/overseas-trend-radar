@@ -77,25 +77,33 @@ REPORT_SECTION_ORDER = [
 
 
 SECTION_LIMITS = {
-    "head_releases": 5,
-    "music_ai_industry": 4,
-    "social_trends": 5,
-    "culture_art": 3,
-    "politics": 4,
+    "head_releases": 6,
+    "music_ai_industry": 6,
+    "social_trends": 6,
+    "culture_art": 6,
+    "politics": 6,
     "ops_suggestions": 0,  # 由 generate_action_plan 填充，不走 RSS 通道
+}
+
+
+SECTION_MIN_COUNTS = {
+    "head_releases": 3,
+    "social_trends": 3,
+    "culture_art": 2,
+    "politics": 3,
 }
 
 
 SECTION_MIN_BUSINESS_SCORES = {
     "head_releases": 3.0,
-    "music_ai_industry": 4.2,
+    "music_ai_industry": 3.0,
     "social_trends": 2.0,  # 从 3.2 降低，允许更多社媒事件
-    "culture_art": 2.4,
+    "culture_art": 1.0,
     "politics": 0.0,  # 政治新闻直接放行，不要求业务相关
 }
 
 
-MAX_REPORT_ITEMS = 18
+MAX_REPORT_ITEMS = 36
 
 
 COUNTRY_NAMES = {
@@ -173,6 +181,18 @@ HEAD_RELEASE_INCLUDE = [
     "pre-save",
     "presave",
     "debut",
+    "tour",
+    "tour dates",
+    "festival",
+    "lineup",
+    "live show",
+    "live performance",
+    "live debut",
+    "premiere",
+    "setlist",
+    "playlist",
+    "listening party",
+    "listening experience",
 ]
 
 HEAD_RELEASE_EXCLUDE = [
@@ -213,14 +233,28 @@ HEAD_RELEASE_MEDIA_INCLUDE = [
     "release date",
     "out now",
     "drops",
+    "drop",
     "release",
     "releases",
     "announces",
+    "announce",
     "coming",
     "debut",
     "teaser",
     "trailer",
     "pre-save",
+    "tour",
+    "tour dates",
+    "festival",
+    "lineup",
+    "live show",
+    "live performance",
+    "live debut",
+    "premiere",
+    "setlist",
+    "playlist",
+    "listening party",
+    "listening experience",
 ]
 
 HEAD_RELEASE_PRIORITY_ARTISTS = [
@@ -367,13 +401,59 @@ POLITICS_KEYWORDS = [
 CULTURE_KEYWORDS = [
     "film",
     "movie",
+    "cinema",
+    "theater",
+    "theatre",
+    "tv",
+    "series",
+    "showrunner",
+    "streaming series",
     "festival",
+    "cannes",
+    "sundance",
+    "venice",
+    "berlin",
+    "toronto",
+    "tribeca",
+    "sxsw",
+    "locarno",
+    "miffest",
     "soccer",
     "football",
     "art",
+    "artist",
+    "gallery",
     "museum",
     "exhibition",
+    "installation",
+    "contemporary art",
     "trailer",
+    "teaser",
+    "adaptation",
+    "prequel",
+    "sequel",
+    "remake",
+    "reboot",
+    "documentary",
+    "animation",
+    "anime",
+    "horror",
+    "sci-fi",
+    "fantasy",
+    "director",
+    "filmmaker",
+    "actor",
+    "actress",
+    "cast",
+    "screenwriter",
+    "producer",
+    "auteur",
+    "franchise",
+    "video game adaptation",
+    "letterboxd",
+    "soundtrack",
+    "score",
+    "composer",
     "box office",
 ]
 
@@ -500,18 +580,56 @@ SOCIAL_FUN_KEYWORDS = [
 CULTURE_FUN_KEYWORDS = [
     "film",
     "movie",
+    "cinema",
     "tv",
     "series",
+    "streaming series",
     "trailer",
+    "teaser",
+    "adaptation",
+    "prequel",
+    "sequel",
+    "remake",
+    "reboot",
+    "horror",
+    "sci-fi",
+    "fantasy",
+    "animation",
+    "anime",
+    "director",
+    "filmmaker",
+    "actor",
+    "actress",
+    "cast",
+    "screenwriter",
+    "producer",
+    "auteur",
+    "franchise",
+    "video game adaptation",
+    "letterboxd",
     "festival",
+    "cannes",
+    "sundance",
+    "venice",
+    "berlin",
+    "toronto",
+    "tribeca",
+    "sxsw",
+    "locarno",
     "art",
+    "artist",
+    "gallery",
     "museum",
     "exhibition",
+    "installation",
+    "contemporary art",
     "documentary",
-    "animation",
     "youth culture",
     "fashion",
     "visual",
+    "soundtrack",
+    "score",
+    "composer",
 ]
 
 
@@ -754,6 +872,61 @@ FEED_SOURCES = [
         exclude_keywords=tuple(HEAD_RELEASE_EXCLUDE),
     ),
     FeedSource(
+        key="nme_music_head_release",
+        name="NME Music",
+        url="https://www.nme.com/news/music/feed",
+        section="head_releases",
+        max_age_days=3,
+        max_items=4,
+        priority=78,
+        include_keywords=tuple(HEAD_RELEASE_MEDIA_INCLUDE),
+        exclude_keywords=tuple(HEAD_RELEASE_EXCLUDE),
+    ),
+    FeedSource(
+        key="stereogum_head_release",
+        name="Stereogum",
+        url="https://www.stereogum.com/feed/",
+        section="head_releases",
+        max_age_days=3,
+        max_items=4,
+        priority=76,
+        include_keywords=tuple(HEAD_RELEASE_MEDIA_INCLUDE),
+        exclude_keywords=tuple(HEAD_RELEASE_EXCLUDE),
+    ),
+    FeedSource(
+        key="consequence_music_head_release",
+        name="Consequence Music",
+        url="https://consequence.net/category/music/feed/",
+        section="head_releases",
+        max_age_days=3,
+        max_items=4,
+        priority=74,
+        include_keywords=tuple(HEAD_RELEASE_MEDIA_INCLUDE),
+        exclude_keywords=tuple(HEAD_RELEASE_EXCLUDE),
+    ),
+    FeedSource(
+        key="brooklynvegan_head_release",
+        name="BrooklynVegan",
+        url="https://www.brooklynvegan.com/category/music/feed/",
+        section="head_releases",
+        max_age_days=3,
+        max_items=4,
+        priority=72,
+        include_keywords=tuple(HEAD_RELEASE_MEDIA_INCLUDE),
+        exclude_keywords=tuple(HEAD_RELEASE_EXCLUDE),
+    ),
+    FeedSource(
+        key="freshhiphoprnb_head_release",
+        name="FreshHipHopR&B",
+        url="https://freshhiphoprnb.com/feed/",
+        section="head_releases",
+        max_age_days=3,
+        max_items=4,
+        priority=70,
+        include_keywords=tuple(HEAD_RELEASE_MEDIA_INCLUDE),
+        exclude_keywords=tuple(HEAD_RELEASE_EXCLUDE),
+    ),
+    FeedSource(
         key="mbw",
         name="Music Business Worldwide",
         url="https://www.musicbusinessworldwide.com/feed/",
@@ -796,9 +969,89 @@ FEED_SOURCES = [
         name="Variety Film",
         url="https://variety.com/v/film/feed/",
         section="culture_art",
-        max_age_days=2,
+        max_age_days=3,
         max_items=3,
         priority=75,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="deadline_film",
+        name="Deadline Film",
+        url="https://deadline.com/v/film/feed/",
+        section="culture_art",
+        max_age_days=3,
+        max_items=4,
+        priority=78,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="deadline_tv",
+        name="Deadline TV",
+        url="https://deadline.com/v/tv/feed/",
+        section="culture_art",
+        max_age_days=3,
+        max_items=3,
+        priority=74,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="thr_movies",
+        name="The Hollywood Reporter Movies",
+        url="https://www.hollywoodreporter.com/c/movies/feed/",
+        section="culture_art",
+        max_age_days=3,
+        max_items=4,
+        priority=76,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="thr_tv",
+        name="The Hollywood Reporter TV",
+        url="https://www.hollywoodreporter.com/c/tv/feed/",
+        section="culture_art",
+        max_age_days=3,
+        max_items=3,
+        priority=72,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="indiewire_film",
+        name="IndieWire Film",
+        url="https://www.indiewire.com/c/film/feed/",
+        section="culture_art",
+        max_age_days=3,
+        max_items=4,
+        priority=74,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="guardian_film",
+        name="The Guardian Film",
+        url="https://www.theguardian.com/film/rss",
+        section="culture_art",
+        max_age_days=3,
+        max_items=3,
+        priority=70,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="nme_film",
+        name="NME Film",
+        url="https://www.nme.com/film/feed",
+        section="culture_art",
+        max_age_days=3,
+        max_items=3,
+        priority=68,
+        include_keywords=tuple(CULTURE_KEYWORDS),
+    ),
+    FeedSource(
+        key="hyperallergic",
+        name="Hyperallergic",
+        url="https://hyperallergic.com/feed/",
+        section="culture_art",
+        max_age_days=3,
+        max_items=3,
+        priority=66,
         include_keywords=tuple(CULTURE_KEYWORDS),
     ),
     FeedSource(
@@ -1686,7 +1939,15 @@ def call_llm_json(
 
     serialized_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
     cache = state.setdefault("llm_cache", {})
-    cache_key = hashlib.sha256(f"{cache_namespace}|{serialized_payload}".encode("utf-8")).hexdigest()
+    cache_basis = {
+        "namespace": cache_namespace,
+        "model": OPENAI_MODEL,
+        "system_prompt": system_prompt,
+        "payload": user_payload,
+    }
+    cache_key = hashlib.sha256(
+        json.dumps(cache_basis, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     with TRANSLATION_CACHE_LOCK:
         if cache_key in cache:
             return cache[cache_key]
@@ -1902,9 +2163,13 @@ def editorial_select_sections(
         "Vanso 是 AI 音乐流媒体和短音频兴趣图谱平台；Vizasound 是 AI 音乐创作平台，承载 The Aidols 和 The Aimmys。"
         "请只做精选、合并和压缩，不要写运营意义/可执行动作这类模板废话。"
         "固定保留这些栏目：头部发行、AI·产业动向、社媒热点、文化·艺术界、国际政坛、节庆预警。"
-        "普通电影、普通政治、普通生活争议、普通明星八卦不要选，除非与 AI 音乐、AI 视频、音乐传播、版权分发、创作者经济或影音联动强相关。"
+        "头部发行：如有候选，尽量保留 3-6 条。"
+        "社媒热点：如有候选，保留 3-6 条。"
+        "文化·艺术界：如有候选，保留 2-6 条。"
+        "国际政坛：如有候选，保留 3-6 条重要政治新闻，不要求与业务强相关。"
+        "普通生活争议、普通明星八卦不要选，除非具备社媒传播性、创作者经济、影音联动或可借势讨论价值。"
         "每条输出一行新闻稿口吻：标题要短，summary_zh 写关键信息、时间、数据或影响点。"
-        "总条数最多 18 条；没有高质量内容的栏目可以少选。输出 JSON。"
+        "总条数最多 36 条；候选不足时栏目可以少选。输出 JSON。"
     )
     payload = {
         "items": payload_items,
@@ -1957,6 +2222,26 @@ def editorial_select_sections(
             summary_text = ""
         item.cn_summary = trim_title(summary_text, 96)
         refined[section].append(item)
+
+    for section, min_count in SECTION_MIN_COUNTS.items():
+        fallback_items = fallback.get(section, [])
+        if not fallback_items:
+            continue
+        target_count = min(min_count, SECTION_LIMITS.get(section, min_count), len(fallback_items))
+        if len(refined.get(section, [])) >= target_count:
+            continue
+        existing_keys = {
+            normalize_whitespace(item.link) or normalize_title_key(item.title)
+            for item in refined.get(section, [])
+        }
+        for item in fallback_items:
+            link_key = normalize_whitespace(item.link) or normalize_title_key(item.title)
+            if link_key in existing_keys:
+                continue
+            refined[section].append(item)
+            existing_keys.add(link_key)
+            if len(refined[section]) >= target_count:
+                break
 
     refined = enforce_report_limits(refined)
     selected_count = sum(len(items) for items in refined.values())
@@ -2107,6 +2392,27 @@ def business_relevance_score(section: str, text: str) -> tuple[float, list[str]]
         if contains_any(lowered, ("soundtrack", "film score", "composer", "music video", "concert film", "musical", "song")):
             score += 4.0
             reasons.append("影音音乐联动")
+        if contains_any(lowered, ("film", "movie", "cinema", "documentary", "animation", "anime")):
+            score += 1.4
+            reasons.append("影视内容")
+        if contains_any(lowered, ("tv", "series", "showrunner", "streaming series")):
+            score += 1.2
+            reasons.append("剧集内容")
+        if contains_any(lowered, ("horror", "sci-fi", "fantasy", "thriller", "superhero", "video game adaptation")):
+            score += 1.2
+            reasons.append("类型片/游戏改编")
+        if contains_any(lowered, ("adaptation", "prequel", "sequel", "remake", "reboot", "franchise")):
+            score += 1.2
+            reasons.append("IP 延展")
+        if contains_any(lowered, ("actor", "actress", "director", "filmmaker", "screenwriter", "producer", "cast", "auteur")):
+            score += 1.0
+            reasons.append("主创/演员动态")
+        if contains_any(lowered, ("festival", "cannes", "sundance", "venice", "berlin", "toronto", "tribeca", "sxsw", "locarno", "miffest")):
+            score += 1.4
+            reasons.append("影展/文化节")
+        if contains_any(lowered, ("art", "artist", "gallery", "museum", "exhibition", "installation", "contemporary art")):
+            score += 1.2
+            reasons.append("艺术展览")
         if contains_any(lowered, CULTURE_FUN_KEYWORDS):
             score += 2.8
             reasons.append("文化借势潜力")
@@ -2203,6 +2509,14 @@ def passes_business_gate(section: str, text: str, business_score: float) -> bool
 
 def infer_release_tag(text: str) -> str:
     lowered = text.lower()
+    if keyword_matches(lowered, "tour") or keyword_matches(lowered, "tour dates"):
+        return "巡演"
+    if keyword_matches(lowered, "festival") or keyword_matches(lowered, "lineup"):
+        return "音乐节"
+    if keyword_matches(lowered, "playlist") or keyword_matches(lowered, "setlist"):
+        return "歌单"
+    if keyword_matches(lowered, "live show") or keyword_matches(lowered, "live performance") or keyword_matches(lowered, "live debut") or keyword_matches(lowered, "premiere"):
+        return "现场"
     if keyword_matches(lowered, "music video") or keyword_matches(lowered, "video") or keyword_matches(lowered, "mv") or keyword_matches(lowered, "visual"):
         return "MV"
     if keyword_matches(lowered, "album") or re.search(r"\bep\b|\blp\b", lowered):
@@ -2347,8 +2661,6 @@ def filter_items_for_source(
         if source.key.endswith("_head_release") and contains_any(
             full_text,
             (
-                "tour",
-                "festival appearance",
                 "cancel concert",
                 "hospitalized",
                 "shot",
@@ -2945,17 +3257,17 @@ def generate_action_plan(
         "holidays": serialized_holidays,
         "price_alerts": price_alerts[:2],
         "output_schema": {
-            "app_actions": ["2-3条，面向 App 内资源位/歌单/Push"],
-            "social_actions": ["2-3条，面向社媒内容和短视频"],
-            "localization_actions": ["1-2条，面向国家/语区执行"],
-            "watchouts": ["1-2条，面向风险和注意事项"],
+            "app_actions": ["1-2条字符串，每条不超过45字"],
+            "social_actions": ["1-2条字符串，每条不超过45字"],
+            "localization_actions": ["0-1条字符串，每条不超过45字"],
+            "watchouts": ["0-1条字符串，每条不超过45字"],
         },
     }
     system_prompt = (
         "你是海外音乐平台运营负责人。"
-        "请把当日资讯整理成早上 9:20 的执行清单，输出简体中文 JSON。"
-        "建议必须具体、克制、能在今天上午到今天晚上落地。"
-        "不要空话，每条建议都要体现动作和场景。"
+        "请把当日资讯整理成极简运营建议，输出简体中文 JSON。"
+        "只输出字符串数组，不要对象，不要 priority/time_window/owner/details/success_check。"
+        "每条一句话，短、直接、能执行。总建议数控制在 3 到 5 条。"
     )
     result = call_llm_json(system_prompt, payload, state, diagnostics, "action_plan")
     if not result:
@@ -2967,7 +3279,8 @@ def generate_action_plan(
         if not isinstance(raw_items, list):
             plan[key] = fallback[key]
             continue
-        cleaned = [normalize_whitespace(str(item)) for item in raw_items if normalize_whitespace(str(item))]
+        cleaned = [normalize_action_plan_text(item) for item in raw_items]
+        cleaned = [item for item in cleaned if item]
         plan[key] = cleaned[:3] or fallback[key]
     return plan
 
@@ -3017,6 +3330,25 @@ def build_top_signals(
     return [line for _, line in candidates[:3]]
 
 
+def normalize_action_plan_text(item: Any) -> str:
+    if isinstance(item, dict):
+        risk = normalize_whitespace(str(item.get("risk", "")))
+        today_action = normalize_whitespace(str(item.get("today_action", "")))
+        action = normalize_whitespace(str(item.get("action", "")))
+        if risk and today_action:
+            return trim_title(f"{risk}；{today_action}", 70)
+        if action:
+            return trim_title(action, 60)
+        for key in ("suggestion", "title", "scene"):
+            value = normalize_whitespace(str(item.get(key, "")))
+            if value:
+                return trim_title(value, 60)
+        return ""
+    if isinstance(item, list):
+        return trim_title("；".join(normalize_whitespace(str(part)) for part in item if normalize_whitespace(str(part))), 60)
+    return trim_title(normalize_whitespace(str(item)), 60)
+
+
 def action_plan_to_markdown_lines(action_plan: dict[str, list[str]]) -> list[str]:
     section_labels = [
         ("app_actions", "App内动作"),
@@ -3026,11 +3358,12 @@ def action_plan_to_markdown_lines(action_plan: dict[str, list[str]]) -> list[str
     ]
     lines: list[str] = []
     for key, label in section_labels:
-        items = action_plan.get(key, [])
+        items = [normalize_action_plan_text(item) for item in action_plan.get(key, [])]
+        items = [item for item in items if item]
         if not items:
             continue
-        lines.append(f"{label}：")
-        lines.extend(f"{index}. {item}" for index, item in enumerate(items, start=1))
+        for item in items[:2]:
+            lines.append(f"• **{label}** — {item}")
     return lines
 
 
