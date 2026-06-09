@@ -1986,8 +1986,10 @@ def call_llm_json(
         parsed = extract_json_payload(content)
     except (
         urllib.error.URLError,
+        http.client.RemoteDisconnected,
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
+        TimeoutError,
         json.JSONDecodeError,
         ValueError,
         TypeError,
