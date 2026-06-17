@@ -740,6 +740,17 @@ HOLIDAY_VALUE_KEYWORDS = [
     "public holiday",
     "day off",
     "holiday",
+    # 补充：非英语国家节日名称关键词（英西法德意/墨菲马葡巴）
+    "saint",
+    "st",
+    "san",
+    "nationale",
+    "festa",
+    "fête",
+    "boyne",
+    "día",
+    "jour",
+    "feast",
 ]
 
 
