@@ -89,15 +89,16 @@ SECTION_LIMITS = {
 
 SECTION_MIN_COUNTS = {
     "head_releases": 3,
+    "music_ai_industry": 3,  # 新增：确保 AI 产业动向每天至少 3 条
     "social_trends": 3,
-    "culture_art": 2,
+    "culture_art": 3,  # 从 2 提升到 3
     "politics": 3,
 }
 
 
 SECTION_MIN_BUSINESS_SCORES = {
     "head_releases": 3.0,
-    "music_ai_industry": 3.0,
+    "music_ai_industry": 1.0,  # 从 3.0 降低，放宽 AI 产业动向入选门槛
     "social_trends": 2.0,  # 从 3.2 降低，允许更多社媒事件
     "culture_art": 1.0,
     "politics": 0.0,  # 政治新闻直接放行，不要求业务相关
@@ -1204,14 +1205,9 @@ PRICE_TRACKERS = [
 
 
 HOLIDAY_COUNTRIES = [
-    "US", "GB", "FR", "DE", "IT", "ES", "CA", "AU", "NZ",
-    "JP", "KR", "IN", "TH", "VN", "SG", "ID", "PH", "MY",
-    "BR", "MX", "AR", "CO", "CL", "PE",
-    "NG", "ZA", "EG", "KE", "GH",
-    "SA", "AE", "TR", "IL",
-    "PL", "NL", "SE", "NO", "DK", "FI", "PT", "UA", "RO",
-    "HU", "CZ", "AT", "CH", "BE", "GR",
-    "PK", "BD",
+    # 仅关注以下 10 个国家的节庆预警
+    "GB", "ES", "FR", "DE", "IT",       # 英西法德意
+    "MX", "PH", "MY", "PT", "BR",       # 墨西哥、菲律宾、马来西亚、葡萄牙、巴西
 ]
 
 
@@ -2172,8 +2168,9 @@ def editorial_select_sections(
         "请只做精选、合并和压缩，不要写运营意义/可执行动作这类模板废话。"
         "固定保留这些栏目：头部发行、AI·产业动向、社媒热点、文化·艺术界、国际政坛、节庆预警。"
         "头部发行：如有候选，尽量保留 3-6 条。"
+        "AI·产业动向：如有候选，保留 3-6 条，关注 AI 音乐工具、流媒体平台、版权、创作者经济等方向。"
         "社媒热点：如有候选，保留 3-6 条。"
-        "文化·艺术界：如有候选，保留 2-6 条。"
+        "文化·艺术界：如有候选，保留 3-6 条。"
         "国际政坛：如有候选，保留 3-6 条重要政治新闻，不要求与业务强相关。"
         "普通生活争议、普通明星八卦不要选，除非具备社媒传播性、创作者经济、影音联动或可借势讨论价值。"
         "每条输出一行新闻稿口吻：标题要短，summary_zh 写关键信息、时间、数据或影响点。"
@@ -2381,9 +2378,12 @@ def business_relevance_score(section: str, text: str) -> tuple[float, list[str]]
             reasons.append("头部艺人")
 
     if section == "music_ai_industry":
-        if contains_any(lowered, ("royalty", "rights", "licensing", "copyright", "subscription", "distribution")):
+        if contains_any(lowered, ("royalty", "rights", "licensing", "copyright", "subscription", "distribution",
+                                  "ai", "artificial intelligence", "music tech", "generative", "deepfake",
+                                  "sync", "publishing", "label", "dsp", "catalog", "acquisition",
+                                  "startup", "funding", "valuation", "streaming platform")):
             score += 3.0
-            reasons.append("版权/分发/订阅")
+            reasons.append("版权/分发/订阅/AI产业")
 
     if section == "social_trends":
         if contains_any(lowered, ("tiktok", "reels", "shorts", "viral", "challenge", "meme")) and contains_any(
@@ -2512,6 +2512,10 @@ def passes_business_gate(section: str, text: str, business_score: float) -> bool
                 "visual",
             ),
         )
+    if section == "music_ai_industry":
+        # AI 产业动向：business_score ≥ 1.0 即可直接通过（已在上方 min_score 校验）
+        # 额外放宽：若文章明确涉及 AI / 音乐产业关键词，也放行
+        return True
     return True
 
 
