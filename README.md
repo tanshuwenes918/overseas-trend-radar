@@ -112,8 +112,9 @@ python3 main.py --dry-run --date 2026-04-07 --debug
 如果未配置 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`：
 
 - workflow 仍然可以跑
-- 会自动回退到规则摘要 + 基础翻译模式
-- 不会阻塞 PR 合并
+- 会尝试生成规则筛选 + 基础翻译的直接翻译版，并明确标注
+- 只有基础翻译确认成功且内容通过质量检查，才发送直译版
+- 基础翻译也失败时停止正式日报，尝试发送简短失败通知，并让 Actions 标记失败
 
 ### 3. 启用工作流
 
@@ -128,12 +129,40 @@ python3 main.py --dry-run --date 2026-04-07 --debug
 - 在 GitHub Actions 页面手动运行一次
 - 可选输入 `report_date`
 - 建议保留 `skip_if_already_sent = true`
-- 运行后会把 `last_report.md`、`last_card.json`、`state.json` 作为 artifact 上传，便于排查
+- 勾选 `dry_run = true` 可使用真实信源和已配置的模型、翻译服务生成预览，全程不发送飞书消息（包括失败通知）
+- 运行后产物保留 14 天；在 Actions Summary 和 `report-output/run_status.json` 中查看生成模式、失败环节及发送状态
 
 ### 5. 外部定时触发
 
 - 推荐用 `cron-job.org` 免费版
 - 具体配置见 [EXTERNAL_CRON_SETUP.md](/Users/mac/Downloads/overseas-trend-radar/EXTERNAL_CRON_SETUP.md)
+
+## 发送确认与故障排查
+
+- 正常：发送完整日报，模型参与摘要、精选和运营建议。
+- LLM 未配置、请求失败或结果无效：仅在入选新闻的标题与独立摘要都已确认翻译成功时，发送标注“直接翻译版”的日报；不附模板运营建议。
+- LLM 与基础翻译均不可用：不发送正式日报，尝试发送一条简短失败通知，包含模型/翻译失败原因与运行链接；即使通知成功，Actions 仍返回失败，且不记录正式日报已发送。
+- 飞书：必须收到明确成功的 `code: 0` 或 `StatusCode: 0`。业务拒绝、缺失/冲突状态码、网络超时都不能记录为已发送。
+- POST 不自动重试。发送结果为 `unconfirmed` 时，请先核对群里是否已收到，再决定补跑，避免重复发送。
+- 已确认当天发送成功时，保留 `skip_if_already_sent = true` 会在抓取前直接跳过。
+- 其他抓取、质量检查和程序异常在 Actions 中标记失败；本次不新增通用群告警、自动保活或定时变更。
+
+在运行页面的 Summary，或下载 `report-output` 中的下列文件排查：
+
+| 文件 | 内容 |
+| --- | --- |
+| `run_status.json` | 报告日期、生成模式、失败环节、模型/翻译失败原因、飞书发送状态 |
+| `diagnostics.json` | 抓取、翻译、模型和质量检查的诊断信息 |
+| `quality_errors.json` | 内容质量检查失败的具体条件（若有） |
+| `last_report.md` / `last_card.json` | 通过生成检查的日报预览和卡片；失败时不会残留上次的日报 |
+
+退出码：`0` 正常/直译版/重复跳过，`1` 程序异常，`2` 缺少飞书配置，`3` 飞书失败或结果未确认，`4` 内容质量检查失败，`5` LLM 与基础翻译均不可用。预览模式也执行生成质量检查，但不发送任何飞书消息、不更新正式发送日期，Actions 也不保存其状态缓存。
+
+本地测试（无第三方 Python 依赖、不调用真实服务、不向群发消息）：
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## 当前信源
 
@@ -182,9 +211,9 @@ python3 main.py --dry-run --date 2026-04-07 --debug
 - 订阅价格：只有官方页面快照发生变化时才提示
 - 节庆：按国家抓全年公共假期，默认抓 `25-30 天预警` 和 `5 天内提醒`
 - 政策：只做轻量观察，默认最多展示 1-2 条
-- 中文摘要：优先走大模型结构化增强；若未配置模型，再走自动翻译并缓存；都失败时回退为中文规则摘要
-- 本地运行默认直接生成中文规则摘要；GitHub Actions 会额外开启远程翻译增强
-- 若配置 `DEEPL_API_KEY`，GitHub Actions 会优先走 DeepL 正式翻译服务；否则退回免费翻译接口
+- 中文摘要：先准备基础翻译，再用模型加工；模型任一环节失败时，恢复未经模型修改的基础翻译版本。翻译未确认成功时停止正式日报，不用中文模板假装翻译成功
+- 本地默认仅预览，也会尝试基础翻译；GitHub Actions 正式运行发送日报。两者使用相同的翻译确认与质量检查逻辑
+- 若配置 `DEEPL_API_KEY`，GitHub Actions 使用 DeepL；否则使用免费翻译接口。只缓存成功的中文翻译，旧缓存中的失败原文不会被当作成功译文
 - 若同时配置 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`，会额外生成更完整的中文标题、运营意义、市场提示和动作建议
 
 ## 当前输出结构

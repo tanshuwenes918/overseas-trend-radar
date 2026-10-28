@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import copy
 import hashlib
 import html
 import http.client
@@ -16,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -788,6 +789,138 @@ class NewsItem:
     market_hint: str = ""
     action_hint: str = ""
     risk_note: str = ""
+    translation_verified: bool = False
+    translation_error: str = ""
+
+
+@dataclass
+class ReportHealth:
+    report_date: str
+    mode: str = "normal"
+    stage: str = "starting"
+    delivery: str = "not_attempted"
+    llm_failures: dict[str, str] = field(default_factory=dict)
+    translation_failures: list[dict[str, str]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TranslationResult:
+    text: str
+    verified: bool
+    error: str = ""
+
+
+def error_reason(exc: Exception) -> str:
+    """Describe failures without logging request URLs, headers or credentials."""
+    if isinstance(exc, urllib.error.HTTPError):
+        hints = {
+            401: "认证失败，请检查 API Key",
+            403: "访问被拒绝，请检查权限",
+            404: "接口或模型不存在，请检查地址和模型名",
+            429: "限流或额度不足，请检查配额",
+        }
+        return f"HTTP {exc.code}：{hints.get(exc.code, '接口请求失败')}"
+    if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
+        return "请求超时"
+    if isinstance(exc, urllib.error.URLError):
+        return "网络连接失败，请检查服务可用性"
+    if isinstance(exc, (json.JSONDecodeError, ValueError, TypeError, KeyError, IndexError)):
+        return "返回内容为空、格式错误或缺少必要字段"
+    return f"请求异常（{type(exc).__name__}）"
+
+
+def write_run_status(health: ReportHealth, diagnostics: list[str]) -> None:
+    ensure_data_dir()
+    (DATA_DIR / "run_status.json").write_text(
+        json.dumps(asdict(health), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (DATA_DIR / "diagnostics.json").write_text(
+        json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def finish_run(health: ReportHealth, diagnostics: list[str], exit_code: int) -> int:
+    write_run_status(health, diagnostics)
+    summary = (
+        f"报告日期：{health.report_date}\n"
+        f"生成模式：{health.mode}；环节：{health.stage}；发送状态：{health.delivery}\n"
+    )
+    for stage, reason in health.llm_failures.items():
+        summary += f"LLM {stage}：{reason}\n"
+    for error in health.errors:
+        summary += f"失败原因：{error}\n"
+    print("\n运行结果：\n" + summary)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as output:
+            output.write("```text\n" + summary + "```\n")
+    return exit_code
+
+
+def llm_failed(health: ReportHealth, diagnostics: list[str], stage: str, reason: str) -> None:
+    health.llm_failures[stage] = reason
+    diagnostics.append(f"LLM {stage}失败：{reason}")
+
+
+class FeishuReceiptError(ValueError):
+    pass
+
+
+class FeishuRejected(ValueError):
+    pass
+
+
+def validate_feishu_response(response: Any) -> None:
+    if not isinstance(response, dict):
+        raise FeishuReceiptError("飞书回执格式错误")
+    codes = [response[key] for key in ("code", "StatusCode") if key in response]
+    if not codes:
+        raise FeishuReceiptError("飞书回执缺少业务状态码")
+    if any(type(code) not in (int, str) or str(code) != "0" for code in codes):
+        safe_codes = [str(code) if re.fullmatch(r"-?\d{1,10}", str(code)) else "invalid" for code in codes]
+        raise FeishuRejected(f"飞书拒绝消息，业务状态码：{','.join(safe_codes)}；请检查机器人设置")
+
+
+LLM_STAGE_NAMES = {
+    "item_enrichment": "新闻摘要加工",
+    "editorial_selection": "新闻精选",
+    "action_plan": "运营建议",
+}
+
+
+def direct_translation_notice(health: ReportHealth) -> str:
+    stages = "、".join(LLM_STAGE_NAMES.get(stage, stage) for stage in health.llm_failures)
+    return (
+        f"⚠️ 本期为直接翻译版。LLM 的{stages or '加工'}未完成，新闻使用基础翻译和规则筛选，"
+        "未附 AI 运营建议。请项目维护人检查模型接口配置，必要时更新 Actions Secrets 中的对应字段。"
+    )
+
+
+def deliver_payload(payload: dict[str, Any], webhook: str | None, health: ReportHealth) -> int:
+    if not webhook:
+        health.delivery = "not_attempted"
+        health.errors.append("缺少 FEISHU_WEBHOOK_URL，未尝试发送")
+        return 2
+    try:
+        response = post_json(webhook, payload)
+        validate_feishu_response(response)
+    except FeishuRejected as exc:
+        health.delivery = "rejected"
+        health.errors.append(str(exc))
+        return 3
+    except urllib.error.HTTPError as exc:
+        health.delivery = "failed"
+        health.errors.append(f"飞书 HTTP {exc.code}，请维护人检查机器人和服务状态")
+        return 3
+    except (FeishuReceiptError, ValueError, TypeError, urllib.error.URLError,
+            http.client.HTTPException, TimeoutError, OSError) as exc:
+        health.delivery = "unconfirmed"
+        health.errors.append("飞书发送结果未确认：" + error_reason(exc) + "；请先核对群内消息再决定补跑")
+        return 3
+    health.delivery = "sent"
+    print("Feishu response: business status confirmed successful")
+    return 0
 
 
 FEED_SOURCES = [
@@ -1341,33 +1474,11 @@ def post_json(
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            return json.loads(response.read().decode(charset, errors="replace"))
-    except urllib.error.URLError:
-        cmd = [
-            "curl",
-            "-sS",
-            "--compressed",
-            "--connect-timeout",
-            str(min(timeout, 4)),
-            "--max-time",
-            str(timeout),
-            "-X",
-            "POST",
-        ]
-        cmd.extend(["-H", "Content-Type: application/json; charset=utf-8"])
-        for header_key, header_value in headers.items():
-            cmd.extend(["-H", f"{header_key}: {header_value}"])
-        cmd.extend(["-d", json.dumps(payload, ensure_ascii=False), url])
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=timeout,
-            check=True,
-        )
-        return json.loads(result.stdout.decode("utf-8", errors="replace") or "{}")
+    # Do not retry POSTs automatically: a lost receipt does not mean the server
+    # did not accept the message. In particular, retrying Feishu can double-send.
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return json.loads(response.read().decode(charset, errors="replace"))
 
 
 def truncate_text(text: str, max_len: int) -> str:
@@ -1787,6 +1898,49 @@ def translate_via_google_unofficial(text: str, timeout: int = 12) -> str:
     return translated
 
 
+def translate_verified(
+    text: str,
+    state: dict[str, Any],
+    cache_namespace: str,
+) -> TranslationResult:
+    text = normalize_whitespace(text)
+    if not text:
+        return TranslationResult("", False, "原文为空")
+    # Old entries can be untranslated originals saved after an API failure.
+    # Version the keys, and only cache successful Chinese translations.
+    cache = state.setdefault("translation_cache", {})
+    cache_key = hashlib.sha256(f"verified-v2|{cache_namespace}|{text}".encode("utf-8")).hexdigest()
+    with TRANSLATION_CACHE_LOCK:
+        cached = cache.get(cache_key)
+    if isinstance(cached, str) and cached != text and has_cjk(cached):
+        return TranslationResult(cached, True)
+    if not REMOTE_TRANSLATION_ENABLED:
+        return TranslationResult(text, False, "远程翻译未启用")
+    try:
+        if DEEPL_API_KEY:
+            translated = translate_via_deepl(text, timeout=20)
+        else:
+            translated = translate_via_google_unofficial(text, timeout=12)
+        if not translated or translated == text or not has_cjk(translated):
+            raise ValueError("Translation did not return Chinese")
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        TimeoutError,
+        json.JSONDecodeError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        IndexError,
+    ) as exc:
+        return TranslationResult(text, False, error_reason(exc))
+    with TRANSLATION_CACHE_LOCK:
+        cache[cache_key] = translated
+    return TranslationResult(translated, True)
+
+
 def translate_text_to_zh(
     text: str,
     state: dict[str, Any],
@@ -1794,45 +1948,10 @@ def translate_text_to_zh(
     cache_namespace: str = "default",
     record_errors: bool = False,
 ) -> str:
-    text = normalize_whitespace(text)
-    if not text:
-        return ""
-    cache = state.setdefault("translation_cache", {})
-    cache_key = hashlib.sha256(f"{cache_namespace}|{text}".encode("utf-8")).hexdigest()
-    with TRANSLATION_CACHE_LOCK:
-        if cache_key in cache:
-            return cache[cache_key]
-
-    if not REMOTE_TRANSLATION_ENABLED:
-        with TRANSLATION_CACHE_LOCK:
-            cache[cache_key] = text
-        return text
-
-    try:
-        if DEEPL_API_KEY:
-            translated = translate_via_deepl(text, timeout=20)
-        else:
-            translated = translate_via_google_unofficial(text, timeout=12)
-        with TRANSLATION_CACHE_LOCK:
-            cache[cache_key] = translated
-        return translated
-    except (
-        urllib.error.URLError,
-        http.client.RemoteDisconnected,
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        json.JSONDecodeError,
-        RuntimeError,
-        ValueError,
-        TypeError,
-        IndexError,
-    ) as exc:
-        if record_errors:
-            diagnostics.append(f"翻译失败: {exc}")
-
-    with TRANSLATION_CACHE_LOCK:
-        cache[cache_key] = text
-    return text
+    result = translate_verified(text, state, cache_namespace)
+    if not result.verified and record_errors:
+        diagnostics.append(f"翻译失败：{result.error}")
+    return result.text
 
 
 def enrich_cn_summaries(
@@ -1840,59 +1959,34 @@ def enrich_cn_summaries(
     state: dict[str, Any],
     diagnostics: list[str],
 ) -> None:
-    items: list[NewsItem] = []
-    for section_items in sections.values():
-        items.extend(section_items)
+    items = [item for section_items in sections.values() for item in section_items]
 
-    def translate_item(item: NewsItem) -> tuple[NewsItem, str, str, bool]:
-        if ENGLISH_OUTPUT_MODE:
-            return item, item.title, item.title, False
+    def translate_item(item: NewsItem) -> tuple[NewsItem, TranslationResult, TranslationResult]:
         summary_text = summary_source_text(item)
-        # 如果摘要来源就是标题本身，标记为"无独立摘要"
-        summary_is_just_title = (summary_text == item.title)
-        translated_summary = translate_text_to_zh(
-            summary_text,
-            state=state,
-            diagnostics=diagnostics,
-            cache_namespace=f"{item.section}:summary",
-            record_errors=False,
-        )
-        if translated_summary == summary_text and not has_cjk(summary_text):
-            translated_summary = heuristic_cn_summary(item)
-
-        title_text = title_source_text(item)
-        translated_title = translate_text_to_zh(
-            title_text,
-            state=state,
-            diagnostics=diagnostics,
-            cache_namespace=f"{item.section}:title",
-            record_errors=False,
-        )
-        if translated_title == title_text and not has_cjk(title_text):
-            translated_title = heuristic_cn_summary(item)
-        return item, translated_summary, translated_title, summary_is_just_title
+        title_result = translate_verified(item.title, state, f"{item.section}:title")
+        if summary_text == item.title:
+            summary_result = TranslationResult("", True)
+        else:
+            summary_result = translate_verified(summary_text, state, f"{item.section}:summary")
+        return item, title_result, summary_result
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [executor.submit(translate_item, item) for item in items]
+        futures = {executor.submit(translate_item, item): item for item in items}
         for future in concurrent.futures.as_completed(futures):
+            item = futures[future]
             try:
-                item, translated_summary, translated_title, summary_is_just_title = future.result()
+                _, title, summary = future.result()
+                item.translation_verified = title.verified and summary.verified
+                item.translation_error = "; ".join(
+                    result.error for result in (title, summary) if not result.verified
+                )
+                item.cn_title = trim_title(title.text, 64) if title.verified else ""
+                item.cn_summary = trim_title(summary.text, 120) if summary.verified else ""
             except Exception as exc:
-                diagnostics.append(f"翻译线程失败，已回退: {exc}")
-                continue
-            # 如果摘要来源就是标题，cn_summary 置空（避免摘要=标题的重复）
-            if summary_is_just_title:
-                item.cn_summary = ""
-            else:
-                item.cn_summary = trim_title(
-                    translated_summary if has_cjk(translated_summary) else "",
-                    120,
-                )
-            if not item.cn_title:
-                item.cn_title = trim_title(
-                    translated_title if has_cjk(translated_title) else heuristic_cn_summary(item),
-                    64,
-                )
+                item.translation_verified = False
+                item.translation_error = error_reason(exc)
+            if not item.translation_verified:
+                diagnostics.append(f"基础翻译失败（{item.source_name}）：{item.translation_error}")
 
 
 def fetch_article_excerpt(url: str, state: dict[str, Any], diagnostics: list[str]) -> str:
@@ -1946,8 +2040,10 @@ def call_llm_json(
     state: dict[str, Any],
     diagnostics: list[str],
     cache_namespace: str,
+    health: ReportHealth,
 ) -> dict[str, Any] | None:
     if not llm_is_configured():
+        llm_failed(health, diagnostics, cache_namespace, "模型配置不完整，请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL")
         return None
 
     serialized_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
@@ -1981,10 +2077,14 @@ def call_llm_json(
             timeout=OPENAI_TIMEOUT,
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         )
+        if not isinstance(response, dict):
+            raise ValueError("LLM response is not an object")
         choices = response.get("choices", [])
-        if not choices:
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise ValueError("LLM response missing choices")
         message = choices[0].get("message", {})
+        if not isinstance(message, dict):
+            raise ValueError("LLM message is not an object")
         content = message.get("content", "")
         if isinstance(content, list):
             content = "".join(
@@ -1993,7 +2093,7 @@ def call_llm_json(
         parsed = extract_json_payload(content)
     except (
         urllib.error.URLError,
-        http.client.RemoteDisconnected,
+        http.client.HTTPException,
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
         TimeoutError,
@@ -2002,7 +2102,7 @@ def call_llm_json(
         TypeError,
         KeyError,
     ) as exc:
-        diagnostics.append(f"LLM 增强失败({cache_namespace}): {exc}")
+        llm_failed(health, diagnostics, cache_namespace, error_reason(exc))
         return None
 
     with TRANSLATION_CACHE_LOCK:
@@ -2014,6 +2114,7 @@ def enrich_items_with_llm(
     sections: dict[str, list[NewsItem]],
     state: dict[str, Any],
     diagnostics: list[str],
+    health: ReportHealth,
 ) -> None:
     items: list[NewsItem] = []
     for section_items in sections.values():
@@ -2021,9 +2122,8 @@ def enrich_items_with_llm(
     if not items:
         return
 
-    enrich_article_excerpts(sections, state, diagnostics)
-    enrich_cn_summaries(sections, state, diagnostics)
     if not llm_is_configured():
+        llm_failed(health, diagnostics, "item_enrichment", "模型配置不完整，请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL")
         return
 
     payload_items: list[dict[str, Any]] = []
@@ -2063,32 +2163,37 @@ def enrich_items_with_llm(
             ]
         },
     }
-    result = call_llm_json(system_prompt, payload, state, diagnostics, "item_enrichment")
-    if not result:
+    result = call_llm_json(system_prompt, payload, state, diagnostics, "item_enrichment", health)
+    if result is None:
         return
 
     result_items = result.get("items", [])
     if not isinstance(result_items, list):
-        diagnostics.append("LLM 条目增强返回格式异常")
+        llm_failed(health, diagnostics, "item_enrichment", "新闻加工返回格式错误")
         return
 
     by_id = {payload_item["id"]: item for payload_item, item in zip(payload_items, items)}
+    valid_ids: set[str] = set()
     for enriched in result_items:
         if not isinstance(enriched, dict):
             continue
-        item = by_id.get(enriched.get("id", ""))
+        item_id = str(enriched.get("id", ""))
+        item = by_id.get(item_id)
         if not item:
             continue
-        item.cn_title = normalize_whitespace(enriched.get("cn_title", "")) or item.cn_title or item.title
-        candidate_summary = normalize_whitespace(enriched.get("summary_zh", "")) or item.cn_summary
+        title = enriched.get("cn_title")
+        candidate_summary = enriched.get("summary_zh")
+        if not isinstance(title, str) or not has_cjk(title) or not isinstance(candidate_summary, str) or not has_cjk(candidate_summary):
+            continue
+        item.cn_title = normalize_whitespace(title)
+        candidate_summary = normalize_whitespace(candidate_summary)
         # LLM 摘要与标题重复时置空，不回退到 heuristic_cn_summary
         if candidate_summary and item.cn_title and candidate_summary == item.cn_title:
-            candidate_summary = ""
+            continue
         item.cn_summary = candidate_summary if has_cjk(candidate_summary) else ""
-        item.why_it_matters = normalize_whitespace(enriched.get("why_it_matters", ""))
-        item.market_hint = normalize_whitespace(enriched.get("market_hint", ""))
-        item.action_hint = normalize_whitespace(enriched.get("action_hint", ""))
-        item.risk_note = normalize_whitespace(enriched.get("risk_note", ""))
+        valid_ids.add(item_id)
+    if valid_ids != set(by_id):
+        llm_failed(health, diagnostics, "item_enrichment", "新闻加工结果缺少条目或有效中文标题、摘要")
 
 
 def empty_report_sections() -> dict[str, list[NewsItem]]:
@@ -2139,9 +2244,12 @@ def editorial_select_sections(
     state: dict[str, Any],
     diagnostics: list[str],
     audit: dict[str, Any] | None = None,
+    health: ReportHealth | None = None,
 ) -> dict[str, list[NewsItem]]:
+    health = health if health is not None else ReportHealth("")
     fallback = enforce_report_limits(sections)
     if not llm_is_configured():
+        llm_failed(health, diagnostics, "editorial_selection", "模型配置不完整，请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL")
         return fallback
 
     candidate_items: list[NewsItem] = []
@@ -2201,13 +2309,13 @@ def editorial_select_sections(
             ]
         },
     }
-    result = call_llm_json(system_prompt, payload, state, diagnostics, "editorial_selection")
-    if not result:
+    result = call_llm_json(system_prompt, payload, state, diagnostics, "editorial_selection", health)
+    if result is None:
         return fallback
 
     selected = result.get("items", [])
     if not isinstance(selected, list):
-        diagnostics.append("LLM 总编精选返回格式异常")
+        llm_failed(health, diagnostics, "editorial_selection", "精选结果格式错误")
         return fallback
 
     refined = empty_report_sections()
@@ -2215,9 +2323,14 @@ def editorial_select_sections(
     allowed_sections = {section for section in REPORT_SECTION_ORDER if section not in {"holiday_events", "ops_suggestions"}}
     for entry in selected:
         if not isinstance(entry, dict):
+            llm_failed(health, diagnostics, "editorial_selection", "精选结果包含无效条目")
             continue
         item = id_to_item.get(str(entry.get("id", "")))
         if not item:
+            llm_failed(health, diagnostics, "editorial_selection", "精选结果引用了不存在的新闻")
+            continue
+        if not isinstance(entry.get("cn_title"), str) or not has_cjk(entry["cn_title"]) or not isinstance(entry.get("summary_zh"), str) or not has_cjk(entry["summary_zh"]):
+            llm_failed(health, diagnostics, "editorial_selection", "精选结果缺少有效中文标题、摘要")
             continue
         section = str(entry.get("section") or item.section)
         if section not in allowed_sections:
@@ -2262,8 +2375,11 @@ def editorial_select_sections(
     refined = enforce_report_limits(refined)
     selected_count = sum(len(items) for items in refined.values())
     if selected_count < min(4, len(candidate_items)):
-        diagnostics.append("LLM 总编精选有效条目过少，已回退到规则复筛结果")
+        llm_failed(health, diagnostics, "editorial_selection", "精选有效条目过少")
         return fallback
+
+    if not selected:
+        llm_failed(health, diagnostics, "editorial_selection", "精选结果为空")
 
     if audit is not None:
         audit["llm_selected"] = [
@@ -3247,9 +3363,11 @@ def generate_action_plan(
     price_alerts: list[dict[str, Any]],
     state: dict[str, Any],
     diagnostics: list[str],
+    health: ReportHealth,
 ) -> dict[str, list[str]]:
     fallback = fallback_action_plan(report_date, sections, holidays, price_alerts)
     if not llm_is_configured():
+        llm_failed(health, diagnostics, "action_plan", "模型配置不完整，请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL")
         return fallback
 
     serialized_holidays = {
@@ -3292,19 +3410,22 @@ def generate_action_plan(
         "只输出字符串数组，不要对象，不要 priority/time_window/owner/details/success_check。"
         "每条一句话，短、直接、能执行。总建议数控制在 3 到 5 条。"
     )
-    result = call_llm_json(system_prompt, payload, state, diagnostics, "action_plan")
-    if not result:
+    result = call_llm_json(system_prompt, payload, state, diagnostics, "action_plan", health)
+    if result is None:
         return fallback
 
     plan: dict[str, list[str]] = {}
     for key in ("app_actions", "social_actions", "localization_actions", "watchouts"):
         raw_items = result.get(key, [])
-        if not isinstance(raw_items, list):
-            plan[key] = fallback[key]
+        if not isinstance(raw_items, list) or any(not isinstance(item, str) or not has_cjk(item) for item in raw_items):
+            llm_failed(health, diagnostics, "action_plan", "运营建议返回格式错误")
+            plan[key] = []
             continue
         cleaned = [normalize_action_plan_text(item) for item in raw_items]
         cleaned = [item for item in cleaned if item]
-        plan[key] = cleaned[:3] or fallback[key]
+        plan[key] = cleaned[:3]
+    if not any(plan.values()):
+        llm_failed(health, diagnostics, "action_plan", "运营建议没有有效内容")
     return plan
 
 
@@ -3407,6 +3528,7 @@ def build_card_payload(
     holidays: dict[str, list[dict[str, Any]]],
     price_alerts: list[dict[str, Any]],
     action_plan: dict[str, list[str]] | None = None,
+    notice: str = "",
 ) -> dict[str, Any]:
     report_label = format_report_date(report_dt.date())
     elements: list[dict[str, Any]] = [
@@ -3456,6 +3578,10 @@ def build_card_payload(
                 }
             )
 
+    if notice:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "markdown", "content": notice})
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -3476,6 +3602,7 @@ def build_console_preview(
     price_alerts: list[dict[str, Any]],
     diagnostics: list[str],
     action_plan: dict[str, list[str]] | None = None,
+    notice: str = "",
 ) -> str:
     blocks = [f"海外运营每日舆情播报 | {format_report_date(report_dt.date())}"]
 
@@ -3510,7 +3637,10 @@ def build_console_preview(
         blocks.append(f"\n【{SECTION_TITLES['ops_suggestions']}】")
         blocks.extend(action_plan_to_markdown_lines(action_plan))
 
-    blocks.append("\n本播报内容基于海外公开信源自动抓取、初筛、复筛和总编精选生成。")
+    if notice:
+        blocks.append("\n" + notice)
+    else:
+        blocks.append("\n本播报内容基于海外公开信源自动抓取、初筛、复筛和总编精选生成。")
 
     if diagnostics:
         blocks.append("\n【诊断信息】")
@@ -3585,8 +3715,9 @@ def parse_args() -> argparse.Namespace:
         description="海外舆情自动监控并推送到飞书",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("--send", action="store_true", help="推送到飞书 webhook")
-    parser.add_argument("--dry-run", action="store_true", help="仅输出预览，不推送")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--send", action="store_true", help="推送到飞书 webhook")
+    mode.add_argument("--dry-run", action="store_true", help="仅输出预览，不推送")
     parser.add_argument("--date", help="报告日期，格式 YYYY-MM-DD")
     parser.add_argument("--timezone", default=DEFAULT_TIMEZONE, help="报告时区")
     parser.add_argument("--webhook", help="飞书 webhook URL；默认读取 FEISHU_WEBHOOK_URL")
@@ -3617,96 +3748,151 @@ def resolve_report_datetime(args: argparse.Namespace) -> datetime:
     )
 
 
-def main() -> int:
-    args = parse_args()
-    if not args.send and not args.dry_run:
-        args.dry_run = True
-
+def run_report(args: argparse.Namespace, health: ReportHealth, diagnostics: list[str]) -> int:
     report_dt = resolve_report_datetime(args)
-    diagnostics: list[str] = []
     state = load_state()
-    if not llm_is_configured():
-        diagnostics.append(
-            "LLM 未配置，当前使用规则复筛与简洁摘要。可通过 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL 启用总编精选。"
-        )
+    report_date_str = report_dt.date().isoformat()
+    if args.send and args.skip_if_already_sent and state.get("delivery", {}).get("last_sent_date") == report_date_str:
+        health.stage = "skipped"
+        health.delivery = "already_sent"
+        print(f"{report_date_str} 已成功推送过，跳过本次重复发送。")
+        return finish_run(health, diagnostics, 0)
 
     audit: dict[str, Any] = {
-        "report_date": report_dt.date().isoformat(),
+        "report_date": report_date_str,
         "raw_candidates": [],
         "filtered_candidates": [],
         "scored_candidates": [],
         "final_selected": [],
     }
+    health.stage = "fetching"
+    write_run_status(health, diagnostics)
     sections = fetch_section_items(report_dt, diagnostics, audit=audit)
     holidays = fetch_holiday_items(report_dt.date(), state, diagnostics)
-    enrich_items_with_llm(sections, state, diagnostics)
+    enrich_article_excerpts(sections, state, diagnostics)
+    health.stage = "translation"
+    write_run_status(health, diagnostics)
+    enrich_cn_summaries(sections, state, diagnostics)
+    # Keep an independent copy so partial LLM edits or reclassification cannot
+    # leak into a report advertised as a direct translation.
+    direct_sections = copy.deepcopy(sections)
+    health.stage = "llm"
+    write_run_status(health, diagnostics)
+    enrich_items_with_llm(sections, state, diagnostics, health)
     price_alerts = fetch_price_alerts(report_dt, state, diagnostics)
-    sections = editorial_select_sections(sections, state, diagnostics, audit=audit)
-    action_plan = generate_action_plan(report_dt.date(), sections, holidays, price_alerts, state, diagnostics)
+    action_plan: dict[str, list[str]] = {}
+    if not health.llm_failures:
+        sections = editorial_select_sections(sections, state, diagnostics, audit=audit, health=health)
+    if not health.llm_failures:
+        action_plan = generate_action_plan(report_dt.date(), sections, holidays, price_alerts, state, diagnostics, health)
+
+    notice = ""
+    if health.llm_failures:
+        health.mode = "direct_translation"
+        sections = enforce_report_limits(direct_sections)
+        action_plan = {}
+        audit.pop("llm_selected", None)
+        health.translation_failures = [
+            {"source": item.source_name, "link": item.link, "reason": item.translation_error or "未确认翻译成功"}
+            for section in REPORT_SECTION_ORDER
+            if section not in {"holiday_events", "ops_suggestions"}
+            for item in sections.get(section, []) if not item.translation_verified
+        ]
+        notice = direct_translation_notice(health)
+
     audit["final_selected"] = [
         audit_news_item(item)
         for section in REPORT_SECTION_ORDER
         if section not in {"holiday_events", "ops_suggestions"}
         for item in sections.get(section, [])
     ]
+    health.stage = "quality_check"
     quality_errors = validate_report_quality(sections, holidays, price_alerts)
     if quality_errors:
         audit["quality_errors"] = quality_errors
+        health.errors.extend(quality_errors)
         diagnostics.extend(f"质量闸门: {error}" for error in quality_errors)
     save_state(state)
-    ensure_data_dir()
     write_audit_files(audit)
 
+    if health.translation_failures:
+        health.mode = "failed"
+        health.stage = "translation"
+        health.errors.append(
+            f"LLM 加工失败，且 {len(health.translation_failures)} 条新闻的基础翻译未成功，已停止正式日报。"
+        )
+        reasons = "；".join(dict.fromkeys(item["reason"] for item in health.translation_failures))
+        health.errors.append("基础翻译：" + reasons)
+        if args.send:
+            llm_reasons = "；".join(
+                f"{LLM_STAGE_NAMES.get(stage, stage)}：{reason}" for stage, reason in health.llm_failures.items()
+            )
+            text = (
+                f"⚠️ 海外舆情日报生成失败 | {report_date_str}\n"
+                "本次未发送正式日报：LLM 调用失败，基础翻译也未成功。\n"
+                f"模型：{llm_reasons}\n翻译：{reasons}\n"
+                "请项目维护人检查模型和翻译服务，修复后补跑。"
+            )
+            run_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+            if os.environ.get("GITHUB_REPOSITORY") and os.environ.get("GITHUB_RUN_ID"):
+                text += f"\n运行记录：{run_url}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+            notify_code = deliver_payload(
+                {"msg_type": "text", "content": {"text": text}},
+                args.webhook or os.environ.get("FEISHU_WEBHOOK_URL"), health,
+            )
+            if notify_code == 0:
+                health.delivery = "failure_notice_sent"
+        return finish_run(health, diagnostics, 5)
+
+    if quality_errors:
+        health.mode = "failed"
+        return finish_run(health, diagnostics, 4)
+
     preview = build_console_preview(
-        report_dt=report_dt,
-        sections=sections,
-        holidays=holidays,
-        price_alerts=price_alerts,
-        diagnostics=diagnostics if args.debug else [],
-        action_plan=action_plan,
+        report_dt=report_dt, sections=sections, holidays=holidays,
+        price_alerts=price_alerts, diagnostics=diagnostics if args.debug else [],
+        action_plan=action_plan, notice=notice,
     )
-    payload = build_card_payload(report_dt, sections, holidays, price_alerts, action_plan=action_plan)
+    payload = build_card_payload(report_dt, sections, holidays, price_alerts, action_plan=action_plan, notice=notice)
     (DATA_DIR / "last_report.md").write_text(preview, encoding="utf-8")
-    (DATA_DIR / "last_card.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    (DATA_DIR / "last_card.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(preview)
-
     if args.send:
-        if quality_errors:
-            print("\n质量闸门未通过，已停止发送。", file=sys.stderr)
-            return 4
-
+        health.stage = "delivery"
+        # Persist before sending: a killed runner can leave the result uncertain.
+        health.delivery = "unconfirmed"
+        write_run_status(health, diagnostics)
+        delivery_code = deliver_payload(payload, args.webhook or os.environ.get("FEISHU_WEBHOOK_URL"), health)
+        if delivery_code:
+            return finish_run(health, diagnostics, delivery_code)
         delivery_state = state.setdefault("delivery", {})
-        report_date_str = report_dt.date().isoformat()
-        if args.skip_if_already_sent and delivery_state.get("last_sent_date") == report_date_str:
-            print(f"\n{report_date_str} 已成功推送过，跳过本次重复发送。")
-            return 0
-
-        webhook = args.webhook or os.environ.get("FEISHU_WEBHOOK_URL")
-        if not webhook:
-            print("\n缺少飞书 webhook，请通过 --webhook 或 FEISHU_WEBHOOK_URL 提供。", file=sys.stderr)
-            return 2
-
-        try:
-            response = post_json(webhook, payload)
-        except (
-            urllib.error.URLError,
-            subprocess.CalledProcessError,
-            subprocess.TimeoutExpired,
-            json.JSONDecodeError,
-        ) as exc:
-            print(f"\n飞书推送失败: {exc}", file=sys.stderr)
-            return 3
-
-        print("\nFeishu response:")
-        print(json.dumps(response, ensure_ascii=False, indent=2))
         delivery_state["last_sent_date"] = report_date_str
-        delivery_state["last_sent_at"] = datetime.now(ZoneInfo(args.timezone)).isoformat()
+        delivery_state["last_sent_at"] = datetime.now(report_dt.tzinfo).isoformat()
         save_state(state)
+    else:
+        health.delivery = "preview_only"
+    health.stage = "completed"
+    return finish_run(health, diagnostics, 0)
 
-    return 0
+
+def main() -> int:
+    args = parse_args()
+    if not args.send and not args.dry_run:
+        args.dry_run = True
+    report_dt = resolve_report_datetime(args)
+    health = ReportHealth(report_dt.date().isoformat())
+    diagnostics: list[str] = []
+    # Local reruns must not display yesterday's report after today's failure.
+    ensure_data_dir()
+    for filename in ("last_report.md", "last_card.json", "llm_selected.json", "quality_errors.json"):
+        (DATA_DIR / filename).unlink(missing_ok=True)
+    write_run_status(health, diagnostics)
+    try:
+        return run_report(args, health, diagnostics)
+    except Exception as exc:
+        health.mode = "failed"
+        health.errors.append(error_reason(exc))
+        return finish_run(health, diagnostics, 1)
 
 
 if __name__ == "__main__":
