@@ -160,6 +160,8 @@ class PipelineTests(unittest.TestCase):
         self.receipt = {'code': 0}
         self.failing_stage = None
         self.malformed_stage = None
+        self.omitted_enrichment_ids = set()
+        self.editorial_echo_all = False
         self.translation_ok = True
         self.sections = report.empty_report_sections()
         self.sections['head_releases'] = [news_item()]
@@ -196,10 +198,15 @@ class PipelineTests(unittest.TestCase):
         content = json.loads(messages[-1]['content'])
         if 'goal' in content:
             stage = 'item_enrichment'
-            result = {'items': [dict(id=item['id'], cn_title='模型加工标题', summary_zh='模型加工摘要，介绍专辑的发行安排。') for item in content['items']]}
+            result = {'items': [dict(id=item['id'], cn_title='模型加工标题', summary_zh='模型加工摘要，介绍专辑的发行安排。')
+                                for item in content['items'] if item['id'] not in self.omitted_enrichment_ids]}
         elif 'section_limits' in content:
             stage = 'editorial_selection'
             result = {'items': [dict(id='item_1', section='head_releases', cn_title='模型精选标题', summary_zh='模型精选摘要，介绍专辑的具体安排。')]}
+            if self.editorial_echo_all:
+                result = {'items': [dict(id=item['id'], section=item['section'],
+                                        cn_title=f"模型精选标题{item['id']}",
+                                        summary_zh='模型精选摘要，介绍专辑的具体安排。') for item in content['items']]}
         else:
             stage = 'action_plan'
             result = {'app_actions': ['为这张专辑准备推荐位。'], 'social_actions': [], 'localization_actions': [], 'watchouts': []}
@@ -244,23 +251,43 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('模型精选标题', json.dumps(self.sent[0], ensure_ascii=False))
         self.assertIn('【运营建议】', json.dumps(self.sent[0], ensure_ascii=False))
 
-    def test_llm_failure_at_each_stage_sends_only_verified_direct_translation(self):
-        for stage in ('item_enrichment', 'editorial_selection', 'action_plan'):
-            with self.subTest(stage=stage):
-                self.failing_stage = stage
-                code, status = self.run_report('--send')
-                self.assertEqual(code, 0)
-                self.assertEqual(status['mode'], 'direct_translation')
-                self.assertIn('HTTP 401', status['llm_failures'][stage])
-                message = json.dumps(self.sent[-1], ensure_ascii=False)
-                self.assertIn('直接翻译版', message)
-                self.assertIn('直接翻译标题', message)
-                self.assertNotIn('模型精选标题', message)
-                self.assertNotIn('模型加工标题', message)
-                self.assertNotIn('【运营建议】', message)
-                self.assertNotIn('secret-key-must-not-leak', (self.data / 'diagnostics.json').read_text())
-                # Cached successful model results must not conceal the next stage's failure.
-                (self.data / 'state.json').unlink()
+    def test_enrichment_transport_failure_sends_verified_direct_translation(self):
+        self.failing_stage = 'item_enrichment'
+        code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertEqual(status['mode'], 'direct_translation')
+        self.assertIn('HTTP 401', status['llm_failures']['item_enrichment'])
+        message = json.dumps(self.sent[0], ensure_ascii=False)
+        self.assertIn('直接翻译版', message)
+        self.assertIn('直接翻译标题', message)
+        self.assertNotIn('模型加工标题', message)
+        self.assertNotIn('【运营建议】', message)
+        self.assertNotIn('secret-key-must-not-leak', (self.data / 'diagnostics.json').read_text())
+
+    def test_editorial_failure_preserves_ai_news_and_still_generates_actions(self):
+        self.failing_stage = 'editorial_selection'
+        code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertEqual(status['mode'], 'ai_partial')
+        self.assertIn('HTTP 401', status['llm_failures']['editorial_selection'])
+        message = json.dumps(self.sent[0], ensure_ascii=False)
+        self.assertIn('模型加工标题', message)
+        self.assertNotIn('直接翻译版', message)
+        self.assertNotIn('直接翻译标题', message)
+        self.assertIn('【运营建议】', message)
+        self.assertEqual(len(self.model_calls), 3)
+
+    def test_action_failure_preserves_selected_ai_news_without_suggestions(self):
+        self.failing_stage = 'action_plan'
+        code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertEqual(status['mode'], 'ai_partial')
+        self.assertIn('HTTP 401', status['llm_failures']['action_plan'])
+        message = json.dumps(self.sent[0], ensure_ascii=False)
+        self.assertIn('模型精选标题', message)
+        self.assertNotIn('直接翻译版', message)
+        self.assertNotIn('直接翻译标题', message)
+        self.assertNotIn('【运营建议】', message)
 
     def test_malformed_llm_outputs_cannot_be_reported_as_normal(self):
         for stage in ('item_enrichment', 'editorial_selection', 'action_plan'):
@@ -268,7 +295,7 @@ class PipelineTests(unittest.TestCase):
                 self.malformed_stage = stage
                 code, status = self.run_report('--dry-run')
                 self.assertEqual(code, 0)
-                self.assertEqual(status['mode'], 'direct_translation')
+                self.assertEqual(status['mode'], 'direct_translation' if stage == 'item_enrichment' else 'ai_partial')
                 self.assertIn(stage, status['llm_failures'])
                 self.assertEqual(self.sent, [])
                 (self.data / 'state.json').unlink()
@@ -293,6 +320,74 @@ class PipelineTests(unittest.TestCase):
         code, status = self.run_report('--send')
         self.assertEqual(code, 0)
         self.assertEqual(status['mode'], 'normal')
+
+    def test_downstream_failure_does_not_require_unused_basic_translations(self):
+        self.translation_ok = False
+        for stage in ('editorial_selection', 'action_plan'):
+            with self.subTest(stage=stage):
+                self.failing_stage = stage
+                code, status = self.run_report('--send')
+                self.assertEqual(code, 0)
+                self.assertEqual(status['mode'], 'ai_partial')
+                self.assertEqual(status['delivery'], 'sent')
+                self.assertEqual(status['translation_failures'], [])
+                self.assertIn('模型', json.dumps(self.sent[-1], ensure_ascii=False))
+                (self.data / 'state.json').unlink()
+
+    def test_failed_editorial_mutations_do_not_leak_into_ai_fallback(self):
+        def invalid_editorial(sections, state, diagnostics, audit, health):
+            sections['head_releases'][0].cn_title = '无效精选污染标题'
+            sections['head_releases'][0].cn_summary = '无效精选污染摘要'
+            report.llm_failed(health, diagnostics, 'editorial_selection', '精选结果引用了不存在的新闻')
+            return sections
+
+        with patch.object(report, 'editorial_select_sections', side_effect=invalid_editorial):
+            code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertEqual(status['mode'], 'ai_partial')
+        message = json.dumps(self.sent[0], ensure_ascii=False)
+        self.assertIn('模型加工标题', message)
+        self.assertNotIn('无效精选污染', message)
+        self.assertIn('【运营建议】', message)
+
+    def test_one_unrepaired_item_keeps_29_ai_items_and_excludes_missing_candidate(self):
+        original_items = []
+        for section in report.REPORT_SECTION_ORDER:
+            if section in {'holiday_events', 'ops_suggestions'}:
+                continue
+            self.sections[section] = []
+            for index in range(6):
+                item = news_item()
+                item.section = section
+                item.title = f'Music album news {section} {index}'
+                item.link += f'/{section}/{index}'
+                self.sections[section].append(item)
+                original_items.append(item)
+        missing_item = original_items[20]
+        self.omitted_enrichment_ids = {'item_21'}
+        self.editorial_echo_all = True
+        code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertNotEqual(status['mode'], 'direct_translation')
+        self.assertEqual(status['delivery'], 'sent')
+        self.assertFalse(status['llm_failures'])
+        self.assertTrue(status['llm_warnings'])
+        selected = json.loads((self.data / 'final_selected.json').read_text())
+        self.assertEqual(len(selected), 29)
+        self.assertNotIn(missing_item.link, [item['link'] for item in selected])
+        payloads = [json.loads(payload.get('messages', payload.get('input'))[-1]['content'])
+                    for _, payload in self.model_calls]
+        enrichment = [payload for payload in payloads if 'goal' in payload]
+        self.assertEqual(len(enrichment), 2)
+        self.assertEqual([item['id'] for item in enrichment[1]['items']], ['item_21'])
+        editorial = next(payload for payload in payloads if 'section_limits' in payload)
+        self.assertEqual(len(editorial['items']), 29)
+        self.assertNotIn(missing_item.link, [item['link'] for item in editorial['items']])
+        self.assertTrue(all('模型加工摘要' in item['summary'] for item in editorial['items']))
+        message = json.dumps(self.sent[0], ensure_ascii=False)
+        self.assertNotIn('直接翻译版', message)
+        self.assertNotIn('直接翻译标题', message)
+        self.assertIn('【运营建议】', message)
 
     def test_business_rejection_does_not_record_delivery_and_can_be_retried(self):
         self.receipt = {'code': 19024}
