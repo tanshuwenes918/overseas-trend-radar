@@ -140,6 +140,7 @@ class PipelineTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.data = Path(self.temp.name)
         self.sent = []
+        self.model_calls = []
         self.receipt = {'code': 0}
         self.failing_stage = None
         self.malformed_stage = None
@@ -174,7 +175,9 @@ class PipelineTests(unittest.TestCase):
         if url == WEBHOOK:
             self.sent.append(payload)
             return self.receipt
-        content = json.loads(payload['messages'][-1]['content'])
+        self.model_calls.append((url, payload))
+        messages = payload.get('messages', payload.get('input'))
+        content = json.loads(messages[-1]['content'])
         if 'goal' in content:
             stage = 'item_enrichment'
             result = {'items': [dict(id=item['id'], cn_title='模型加工标题', summary_zh='模型加工摘要，介绍专辑的发行安排。') for item in content['items']]}
@@ -190,6 +193,9 @@ class PipelineTests(unittest.TestCase):
             raise error
         if self.malformed_stage == stage:
             result = {}
+        if 'input' in payload:
+            return {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
+                'content': [{'type': 'output_text', 'text': json.dumps(result, ensure_ascii=False)}]}]}
         return {'choices': [{'message': {'content': json.dumps(result, ensure_ascii=False)}}]}
 
     def run_report(self, *extra):
@@ -209,6 +215,18 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.saved_state()['delivery']['last_sent_date'], '2026-10-28')
         self.assertIn('模型精选标题', json.dumps(self.sent[0], ensure_ascii=False))
         self.assertNotIn('直接翻译版', json.dumps(self.sent[0], ensure_ascii=False))
+
+    def test_responses_configuration_processes_all_model_stages(self):
+        with patch.object(report, 'OPENAI_BASE_URL', 'https://example.invalid/v1/responses'):
+            code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertEqual(status['mode'], 'normal')
+        self.assertEqual(status['delivery'], 'sent')
+        self.assertEqual(len(self.model_calls), 3)
+        self.assertTrue(all(url.endswith('/responses') for url, _ in self.model_calls))
+        self.assertTrue(all('input' in payload and 'messages' not in payload for _, payload in self.model_calls))
+        self.assertIn('模型精选标题', json.dumps(self.sent[0], ensure_ascii=False))
+        self.assertIn('【运营建议】', json.dumps(self.sent[0], ensure_ascii=False))
 
     def test_llm_failure_at_each_stage_sends_only_verified_direct_translation(self):
         for stage in ('item_enrichment', 'editorial_selection', 'action_plan'):

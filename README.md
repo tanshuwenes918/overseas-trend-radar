@@ -47,11 +47,19 @@
 | --- | --- | --- |
 | `FEISHU_WEBHOOK_URL` | 正式发送必需 | 飞书群机器人的 webhook 地址 |
 | `OPENAI_API_KEY` | 完整日报需要 | 模型接口密钥 |
-| `OPENAI_BASE_URL` | 完整日报需要 | OpenAI 兼容的 Chat Completions 接口地址 |
+| `OPENAI_BASE_URL` | 完整日报需要 | OpenAI 兼容的 Responses 或 Chat Completions 接口地址 |
 | `OPENAI_MODEL` | 完整日报需要 | 服务商实际支持的模型名 |
 | `DEEPL_API_KEY` | 可选 | 基础翻译使用 DeepL；未配置时使用 Google 非官方翻译接口 |
 
-模型配置三项需要同时填写。`OPENAI_BASE_URL` 支持服务根地址、以 `/v1` 结尾的地址，或完整的 `/chat/completions` 地址；程序会补全相应路径。模型服务需支持当前请求使用的 JSON 输出格式。
+模型配置三项需要同时填写。`OPENAI_BASE_URL` 支持以下格式：
+
+| 地址示例 | 优先使用的接口 |
+| --- | --- |
+| `https://gateway.example/v1/responses` | Responses |
+| `https://gateway.example/v1/chat/completions` | Chat Completions |
+| `https://gateway.example` 或 `https://gateway.example/v1` | Chat Completions |
+
+完整端点会原样保留，不会重复拼接路径；自定义路径前缀也会保留。服务仅支持 Responses 时，建议直接填写完整 `/responses` 地址。仅在端点返回 HTTP 404（非明确模型不存在）或 405 时尝试另一接口；认证、限流或服务异常不会通过切换接口掩盖。模型服务需支持相应接口的 JSON 输出格式。
 
 模型未配置时仍可尝试生成直接翻译版，发送条件见上表。不要将密钥写入代码或提交到仓库。
 
