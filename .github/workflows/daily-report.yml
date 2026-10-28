@@ -26,6 +26,15 @@ on:
         required: false
         default: false
         type: boolean
+      llm_api:
+        description: "Model API: auto follows the URL; choose a protocol to pin it"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - responses
+          - chat
 
 jobs:
   run-report:
@@ -41,6 +50,7 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
       OPENAI_TIMEOUT: "180"
+      LLM_API_STYLE: ${{ inputs.llm_api || 'auto' }}
       REPORT_HOUR: "9"
       REPORT_MINUTE: "20"
     steps:

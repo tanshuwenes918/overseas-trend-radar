@@ -800,6 +800,7 @@ class ReportHealth:
     stage: str = "starting"
     delivery: str = "not_attempted"
     llm_failures: dict[str, str] = field(default_factory=dict)
+    llm_protocols: dict[str, str] = field(default_factory=dict)
     translation_failures: list[dict[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -813,6 +814,8 @@ class TranslationResult:
 
 def error_reason(exc: Exception) -> str:
     """Describe failures without logging request URLs, headers or credentials."""
+    if isinstance(exc, LLMOutputError):
+        return str(exc)
     if isinstance(exc, urllib.error.HTTPError):
         hints = {
             401: "认证失败，请检查 API Key",
@@ -846,6 +849,8 @@ def finish_run(health: ReportHealth, diagnostics: list[str], exit_code: int) -> 
         f"报告日期：{health.report_date}\n"
         f"生成模式：{health.mode}；环节：{health.stage}；发送状态：{health.delivery}\n"
     )
+    for stage, protocol in health.llm_protocols.items():
+        summary += f"LLM {stage}：{protocol}\n"
     for stage, reason in health.llm_failures.items():
         summary += f"LLM {stage}：{reason}\n"
     for error in health.errors:
@@ -1511,18 +1516,145 @@ def llm_is_configured() -> bool:
     return bool(OPENAI_API_KEY and OPENAI_BASE_URL and OPENAI_MODEL)
 
 
-def openai_chat_url() -> str:
-    base_url = OPENAI_BASE_URL.strip()
+def llm_endpoint_candidates() -> list[tuple[str, str]]:
+    """Honor an explicit endpoint; only bare service roots gain /v1."""
+    base_url = OPENAI_BASE_URL.strip().rstrip("/")
     if not base_url:
-        return ""
+        return []
     if not re.match(r"^https?://", base_url, flags=re.I):
         base_url = "https://" + base_url
-    base_url = base_url.rstrip("/")
-    if base_url.endswith("/chat/completions"):
-        return base_url
-    if base_url.endswith("/v1"):
-        return base_url + "/chat/completions"
-    return base_url + "/v1/chat/completions"
+    parts = urllib.parse.urlsplit(base_url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.query or parts.fragment:
+        raise ValueError("Invalid model endpoint")
+    if parts.username or parts.password:
+        raise ValueError("Credentials must be passed in headers")
+    path = parts.path.rstrip("/")
+    if path.endswith("/responses"):
+        prefix = path[:-len("/responses")]
+        protocols = ["responses", "chat"]
+    elif path.endswith("/chat/completions"):
+        prefix = path[:-len("/chat/completions")]
+        protocols = ["chat", "responses"]
+    else:
+        prefix = path or "/v1"
+        protocols = ["responses", "chat"]
+    api_style = os.environ.get("LLM_API_STYLE", "auto").strip().lower()
+    if api_style not in {"auto", "chat", "responses"}:
+        raise LLMOutputError("LLM_API_STYLE 必须是 auto、chat 或 responses")
+    if api_style != "auto":
+        protocols = [api_style]
+    suffixes = {"chat": "/chat/completions", "responses": "/responses"}
+    return [
+        (protocol, urllib.parse.urlunsplit((parts.scheme, parts.netloc, prefix + suffixes[protocol], "", "")))
+        for protocol in protocols
+    ]
+
+
+def openai_chat_url() -> str:
+    """Compatibility helper for callers needing the Chat endpoint."""
+    return next((url for protocol, url in llm_endpoint_candidates() if protocol == "chat"), "")
+
+
+def llm_request_payload(protocol: str, system_prompt: str, serialized_payload: str) -> dict[str, Any]:
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": serialized_payload},
+    ]
+    if protocol == "responses":
+        return {
+            "model": OPENAI_MODEL,
+            "input": messages,
+            "text": {"format": {"type": "json_object"}},
+            "store": False,
+            "stream": False,
+        }
+    return {
+        "model": OPENAI_MODEL,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "messages": messages,
+        "stream": False,
+    }
+
+
+class LLMOutputError(ValueError):
+    """Only use fixed, non-sensitive messages here; raw model output is private."""
+
+
+def llm_response_text(protocol: str, response: Any) -> str:
+    if not isinstance(response, dict) or response.get("error"):
+        raise LLMOutputError("模型返回错误或无效响应")
+    if protocol == "chat":
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise LLMOutputError("模型响应缺少 choices")
+        choice = choices[0]
+        if choice.get("finish_reason") not in (None, "stop"):
+            raise LLMOutputError("模型输出未完成或被截断")
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise LLMOutputError("模型响应缺少 message")
+        if message.get("refusal"):
+            raise LLMOutputError("模型拒绝生成本次内容")
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(content, list):
+            if any(isinstance(part, dict) and part.get("type") == "refusal" for part in content):
+                raise LLMOutputError("模型拒绝生成本次内容")
+            chunks = [part["text"] for part in content
+                      if isinstance(part, dict) and isinstance(part.get("text"), str)]
+            if "".join(chunks).strip():
+                return "".join(chunks)
+        raise LLMOutputError("模型响应没有可用文本")
+
+    if response.get("status") not in (None, "completed") or response.get("incomplete_details"):
+        raise LLMOutputError("模型输出未完成或被截断")
+    chunks: list[str] = []
+    output = response.get("output", [])
+    if not isinstance(output, list):
+        raise LLMOutputError("Responses 输出格式错误")
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue  # Reasoning and tool records are not final answer text.
+        if item.get("role", "assistant") != "assistant":
+            continue
+        if item.get("status") not in (None, "completed"):
+            raise LLMOutputError("模型输出未完成或被截断")
+        content = item.get("content", [])
+        if not isinstance(content, list):
+            raise LLMOutputError("Responses 消息格式错误")
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "refusal":
+                raise LLMOutputError("模型拒绝生成本次内容")
+            if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                chunks.append(part["text"])
+    if "".join(chunks).strip():
+        return "".join(chunks)
+    # Some compatible gateways return the SDK-style convenience field directly.
+    if isinstance(response.get("output_text"), str) and response["output_text"].strip():
+        return response["output_text"]
+    raise LLMOutputError("Responses 响应没有可用文本")
+
+
+def is_missing_llm_route(exc: urllib.error.HTTPError) -> bool:
+    if exc.code == 405:
+        return True
+    if exc.code != 404:
+        return False
+    try:
+        body = json.loads(exc.read(8192).decode("utf-8", errors="replace"))
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        codes = [body.get("code", "")] if isinstance(body, dict) else []
+        if isinstance(error, dict):
+            codes.extend([error.get("code", ""), error.get("type", "")])
+        if any("model" in str(code).lower() for code in codes):
+            return False  # A missing model is not a protocol/route mismatch.
+    except (ValueError, TypeError, OSError):
+        pass
+    return True
 
 
 def extract_json_payload(raw_text: str) -> dict[str, Any]:
@@ -2046,51 +2178,48 @@ def call_llm_json(
         llm_failed(health, diagnostics, cache_namespace, "模型配置不完整，请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL")
         return None
 
-    serialized_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
-    cache = state.setdefault("llm_cache", {})
-    cache_basis = {
-        "namespace": cache_namespace,
-        "model": OPENAI_MODEL,
-        "system_prompt": system_prompt,
-        "payload": user_payload,
-    }
-    cache_key = hashlib.sha256(
-        json.dumps(cache_basis, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    with TRANSLATION_CACHE_LOCK:
-        if cache_key in cache:
-            return cache[cache_key]
-
-    request_payload = {
-        "model": OPENAI_MODEL,
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": serialized_payload},
-        ],
-    }
     try:
-        response = post_json(
-            openai_chat_url(),
-            request_payload,
-            timeout=OPENAI_TIMEOUT,
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-        )
-        if not isinstance(response, dict):
-            raise ValueError("LLM response is not an object")
-        choices = response.get("choices", [])
-        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-            raise ValueError("LLM response missing choices")
-        message = choices[0].get("message", {})
-        if not isinstance(message, dict):
-            raise ValueError("LLM message is not an object")
-        content = message.get("content", "")
-        if isinstance(content, list):
-            content = "".join(
-                part.get("text", "") for part in content if isinstance(part, dict)
-            )
-        parsed = extract_json_payload(content)
+        endpoints = llm_endpoint_candidates()
+        serialized_payload = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+        cache = state.setdefault("llm_cache", {})
+        cache_basis = {
+            "version": "dual-api-v1",
+            "endpoints": endpoints,
+            "namespace": cache_namespace,
+            "model": OPENAI_MODEL,
+            "system_prompt": system_prompt,
+            "payload": user_payload,
+        }
+        cache_key = hashlib.sha256(
+            json.dumps(cache_basis, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        with TRANSLATION_CACHE_LOCK:
+            cached = cache.get(cache_key)
+        if isinstance(cached, dict):
+            health.llm_protocols[cache_namespace] = "cache"
+            return cached
+
+        for index, (protocol, url) in enumerate(endpoints):
+            try:
+                response = post_json(
+                    url,
+                    llm_request_payload(protocol, system_prompt, serialized_payload),
+                    timeout=OPENAI_TIMEOUT,
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                )
+            except urllib.error.HTTPError as exc:
+                if index == 0 and len(endpoints) > 1 and is_missing_llm_route(exc):
+                    diagnostics.append(f"LLM {cache_namespace}：{protocol} 端点不可用（HTTP {exc.code}），尝试另一接口")
+                    exc.close()
+                    continue
+                raise
+            parsed = extract_json_payload(llm_response_text(protocol, response))
+            with TRANSLATION_CACHE_LOCK:
+                cache[cache_key] = parsed
+            health.llm_protocols[cache_namespace] = protocol
+            diagnostics.append(f"LLM {cache_namespace}：{protocol} 调用成功")
+            return parsed
+        raise LLMOutputError("模型接口不可用")
     except (
         urllib.error.URLError,
         http.client.HTTPException,
@@ -2104,10 +2233,6 @@ def call_llm_json(
     ) as exc:
         llm_failed(health, diagnostics, cache_namespace, error_reason(exc))
         return None
-
-    with TRANSLATION_CACHE_LOCK:
-        cache[cache_key] = parsed
-    return parsed
 
 
 def enrich_items_with_llm(
@@ -2993,6 +3118,8 @@ def fetch_holiday_items(
             data = fetch_json(url, timeout=12)
         except (
             urllib.error.URLError,
+            TimeoutError,
+            http.client.HTTPException,
             subprocess.CalledProcessError,
             subprocess.TimeoutExpired,
             json.JSONDecodeError,
@@ -3408,8 +3535,10 @@ def generate_action_plan(
     }
     system_prompt = (
         "你是海外音乐平台运营负责人。"
-        "请把当日资讯整理成极简运营建议，输出简体中文 JSON。"
-        "只输出字符串数组，不要对象，不要 priority/time_window/owner/details/success_check。"
+        "请把当日资讯整理成极简运营建议，严格按输入 output_schema 返回一个 JSON 对象。"
+        "对象必须包含 app_actions、social_actions、localization_actions、watchouts 四个原样英文键。"
+        "每个键的值必须是简体中文字符串数组；无建议时使用空数组 []，不可省略键或改成其他字段。"
+        "数组元素只允许一句建议字符串，不要嵌套对象或 priority/time_window/owner/details/success_check。"
         "每条一句话，短、直接、能执行。总建议数控制在 3 到 5 条。"
     )
     result = call_llm_json(system_prompt, payload, state, diagnostics, "action_plan", health)
