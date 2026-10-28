@@ -134,6 +134,22 @@ class DeliveryTests(unittest.TestCase):
         error.close()
 
 
+class HolidaySourceTests(unittest.TestCase):
+    def test_one_country_timeout_does_not_abort_other_holiday_results(self):
+        def fetch(url, **kwargs):
+            if url.endswith('/GB'):
+                raise TimeoutError('source timeout')
+            return [{'countryCode': 'FR', 'date': '2026-10-28',
+                     'name': 'Christmas Day', 'localName': 'Christmas Day'}]
+
+        diagnostics = []
+        with patch.object(report, 'HOLIDAY_COUNTRIES', ['GB', 'FR']), \
+             patch.object(report, 'fetch_json', side_effect=fetch):
+            holidays = report.fetch_holiday_items(date(2026, 10, 28), {}, diagnostics)
+        self.assertEqual([item['country'] for item in holidays['today']], ['FR'])
+        self.assertTrue(any('GB' in error and '抓取失败' in error for error in diagnostics))
+
+
 class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

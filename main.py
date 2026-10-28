@@ -3118,6 +3118,8 @@ def fetch_holiday_items(
             data = fetch_json(url, timeout=12)
         except (
             urllib.error.URLError,
+            TimeoutError,
+            http.client.HTTPException,
             subprocess.CalledProcessError,
             subprocess.TimeoutExpired,
             json.JSONDecodeError,
