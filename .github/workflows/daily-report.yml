@@ -1,5 +1,8 @@
 name: Overseas Trend Radar
 
+permissions:
+  contents: read
+
 concurrency:
   group: overseas-trend-radar-daily
   cancel-in-progress: false
@@ -17,6 +20,11 @@ on:
         description: "Skip if today's report was already delivered"
         required: false
         default: true
+        type: boolean
+      dry_run:
+        description: "Generate and validate without sending Feishu messages"
+        required: false
+        default: false
         type: boolean
 
 jobs:
@@ -48,36 +56,46 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data/state.json
-          key: overseas-trend-radar-state-${{ github.ref_name }}-${{ github.run_id }}
+          key: overseas-trend-radar-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             overseas-trend-radar-state-${{ github.ref_name }}-
 
+      - name: Test delivery and fallback handling
+        run: python3 -m unittest discover -s tests -v
+
       - name: Run report
         shell: bash
+        env:
+          INPUT_REPORT_DATE: ${{ inputs.report_date }}
+          INPUT_SKIP_SENT: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_if_already_sent }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           set -euo pipefail
           ARGS=("--send")
-          if [[ "${{ github.event.inputs.skip_if_already_sent || 'true' }}" == "true" ]]; then
+          if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+            ARGS=("--dry-run")
+          fi
+          if [[ "$INPUT_SKIP_SENT" == "true" ]]; then
             ARGS+=("--skip-if-already-sent")
           fi
-          if [[ -n "${{ github.event.inputs.report_date || '' }}" ]]; then
-            ARGS+=("--date" "${{ github.event.inputs.report_date }}")
+          if [[ -n "$INPUT_REPORT_DATE" ]]; then
+            ARGS+=("--date" "$INPUT_REPORT_DATE")
           fi
           python3 main.py "${ARGS[@]}"
 
       - name: Save state cache
-        if: always()
+        if: ${{ always() && !inputs.dry_run }}
         uses: actions/cache/save@v4
         with:
           path: data/state.json
-          key: overseas-trend-radar-state-${{ github.ref_name }}-${{ github.run_id }}
+          key: overseas-trend-radar-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: report-output
-          retention-days: 3
+          retention-days: 14
           path: |
             data/last_report.md
             data/last_card.json
@@ -88,3 +106,5 @@ jobs:
             data/final_selected.json
             data/llm_selected.json
             data/quality_errors.json
+            data/run_status.json
+            data/diagnostics.json

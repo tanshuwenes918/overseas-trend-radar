@@ -23,6 +23,8 @@ data/scored_candidates.json
 data/final_selected.json
 data/llm_selected.json
 data/quality_errors.json
+data/run_status.json
+data/diagnostics.json
 
 # ── 密钥 & 本地配置 ──
 run_local.secrets.ps1
