@@ -1,261 +1,123 @@
 # 海外舆情飞书雷达
 
-一个低成本、零三方 Python 依赖的海外舆情自动监控脚本，面向音乐运营场景，支持：
+每天从固定的海外新闻订阅源抓取内容，筛选、翻译并生成中文日报，通过飞书群机器人发送。面向音乐与内容运营，使用 GitHub Actions 定时执行，无第三方 Python 包依赖。
 
-- 三大厂牌官方动态与头部发行观察
-- 音乐媒体资讯聚合
-- 音乐 / AI / 流媒体产业动态
-- 官方订阅价格快照比对
-- 海外节庆提醒
-- 社媒热点、文化跨界、国际政坛轻量观察
-- 每条输出中文摘要 + 信源链接
-- 飞书群机器人交互卡片推送
+日报按有内容的栏目展示：**头部发行、AI·产业动向、社媒热点、文化·艺术界、国际政坛、节庆预警、运营建议**。新闻条目展示标题、摘要和信源名；原文链接保存在运行产物中。
 
-## 目录
+## 日常使用
 
-- `main.py`: 主程序
-- `run_report.sh`: 本地运行包装脚本
-- `.github/workflows/daily-report.yml`: GitHub Actions 定时工作流
-- `data/state.json`: 价格快照状态文件，首次运行后自动生成
+默认使用 GitHub Actions，无需保持个人电脑开机。
 
-## 使用方式
+打开 [Actions → Overseas Trend Radar](https://github.com/tanshuwenes918/overseas-trend-radar/actions/workflows/daily-report.yml)，点击 **Run workflow**，分支选择 `main`：
 
-默认口径：
+| 你要做什么 | `dry_run` | `skip_if_already_sent` |
+| --- | --- | --- |
+| 只预览，不发群消息 | `true` | 保持默认 |
+| 正式发送，当天发过就跳过 | `false` | `true`（默认） |
+| 确认需要重新发送，即使当天已发过 | `false` | `false` |
 
-- 报告发送时间按北京时间 `09:20`
-- 每天晨报默认抓取“前一自然日”的内容
-- 如果当天 `09:20` 前出现重要官方更新，可作为“今晨补充”加入
-- 手动执行 `python3 main.py --dry-run` 时，也会按当天 `09:20` 作为统计截止，而不是按你执行命令的当前分钟漂移
+`report_date` 留空表示今天；指定日期时填写 `YYYY-MM-DD`。指定过去的日期只会从当前可取得的信源内容中筛选，不保证能恢复历史日报。
 
-先给脚本可执行权限：
+预览也会访问真实信源、翻译和已配置的模型接口，但不会发送任何飞书消息，包括失败通知。它不更新正式发送日期，工作流也不保存预览的状态缓存。
+
+运行结束后，先看页面的 **Summary**；需要看完整预览时，在 **Artifacts → report-output** 下载 `last_report.md`。产物保留 **14 天**。
+
+## 运行结果怎么看
+
+| 情况 | 日报与群消息 | Actions 结果 |
+| --- | --- | --- |
+| 模型加工、内容检查、飞书回执均正常 | 发送完整日报 | 成功 |
+| 模型未配置、调用失败或结果无效；入选新闻的基础翻译可用 | 发送标注“直接翻译版”的日报，不附运营建议 | 成功，Summary 说明降级原因 |
+| 模型不可用，且有入选新闻的基础翻译未成功 | 停止正式日报，尝试发送简短失败通知 | 失败；通知成功也不算日报成功 |
+| 飞书拒绝消息，或发送结果无法确认 | 不记录为已发送 | 失败 |
+| 内容质量检查或程序运行失败 | 停止正式日报 | 失败 |
+| 状态中已确认该报告日期发送成功，且开启了跳过重复发送 | 跳过本次抓取与发送 | 成功，状态为 `already_sent` |
+
+飞书必须返回明确成功的业务状态码，程序才记录发送日期。**发送超时或回执不明时，先核对群内消息再补跑**：消息可能已送达，只是回执未收到。程序不会自动重试消息发送。
+
+详细状态、错误码和补跑说明见 [运行与排错](docs/OPERATIONS.md)。
+
+## 首次部署
+
+1. 将本项目放入自己的 GitHub 仓库。
+2. 在 **Settings → Secrets and variables → Actions → Repository secrets** 配置下表中的密钥。当前工作流直接读取仓库级 Secrets。
+3. 在 Actions 中启用 **Overseas Trend Radar**，先预览，再正式发送一次。
+
+| Secret | 是否需要 | 用途 |
+| --- | --- | --- |
+| `FEISHU_WEBHOOK_URL` | 正式发送必需 | 飞书群机器人的 webhook 地址 |
+| `OPENAI_API_KEY` | 完整日报需要 | 模型接口密钥 |
+| `OPENAI_BASE_URL` | 完整日报需要 | OpenAI 兼容的 Chat Completions 接口地址 |
+| `OPENAI_MODEL` | 完整日报需要 | 服务商实际支持的模型名 |
+| `DEEPL_API_KEY` | 可选 | 基础翻译使用 DeepL；未配置时使用 Google 非官方翻译接口 |
+
+模型配置三项需要同时填写。`OPENAI_BASE_URL` 支持服务根地址、以 `/v1` 结尾的地址，或完整的 `/chat/completions` 地址；程序会补全相应路径。模型服务需支持当前请求使用的 JSON 输出格式。
+
+模型未配置时仍可尝试生成直接翻译版，发送条件见上表。不要将密钥写入代码或提交到仓库。
+
+## 日报如何生成
+
+1. **抓取信源。** 从代码配置的新闻 RSS 获取标题、摘要、时间和链接，再尝试提取网页文字补充摘要。另行获取公共假期和订阅价格快照。
+2. **规则筛选。** 按时间窗口、栏目关键词、排除词、相关性和新鲜度评分，清理重复标题，各新闻栏目最多保留 6 条候选。
+3. **基础翻译。** 翻译标题与独立摘要，只缓存确认成功的中文译文。
+4. **模型加工。** 根据已有材料改写中文标题与摘要、精选归类，并生成运营建议。模型不会自行联网扩展信源；任一模型环节失败时，改用独立保存的基础翻译结果。
+5. **总量与质量检查。** 新闻、节庆、价格信息合计最多 36 条；先为节庆和价格预留位置，再按原有新闻评分保留其余条目。检查总量、信源及部分栏目的相关性等条件。
+6. **发送与保存。** 生成飞书卡片，确认成功回执后记录报告日期；保存翻译、模型和价格缓存及审计文件。
+
+### 时间口径
+
+- 定时表达式为 `20 1 * * *`，计划在**北京时间每天 09:20**触发。GitHub 调度可能延迟，不保证准点送达。
+- 报告默认包含**前一自然日全天，以及报告当天 09:20 及之前**发布的合格新闻。即使任务下午运行，截止时间也不随启动时间后移。
+- 节庆展示当天、未来 7 天内，以及提前 25–35 天的提醒，并按代码中的节庆条件筛选。
+- 价格观察覆盖 Spotify、Apple Music、Amazon Music 的美国官方页面。首次建立快照；之后识别到价格结构变化时加入日报。
+
+### 信源范围
+
+| 类别 | 代表信源 |
+| --- | --- |
+| 头部发行 | Sony Music、Warner Music Group、Universal Music Group、Billboard、Pitchfork、NME |
+| AI／产业 | Music Business Worldwide、TechCrunch AI、The Verge AI |
+| 社媒热点 | Daily Dot、Mashable、Reddit、Know Your Meme、TMZ |
+| 文化艺术 | Variety、Deadline、The Hollywood Reporter、The Guardian |
+| 国际政坛 | The Hill、NPR、BBC、The Guardian 等 |
+| 节庆 | Nager.Date 公共假期 API |
+
+完整列表以 [main.py](main.py) 中的 `FEED_SOURCES`、`HOLIDAY_COUNTRIES` 和 `PRICE_TRACKERS` 为准。信源可用性和 RSS 保留范围会影响当日覆盖；社媒栏目主要依赖报道和订阅源，并非各平台实时热榜的完整监控。
+
+## 本地运行
+
+建议使用 **Python 3.12**，与 Actions 保持一致。无需 `pip install`；部分网络请求失败后的备用路径会调用系统 `curl`。
+
+在仓库目录中预览：
 
 ```bash
-chmod +x /Users/mac/Downloads/overseas-trend-radar/main.py
-chmod +x /Users/mac/Downloads/overseas-trend-radar/run_report.sh
-```
-
-### 1. 先预览，不推送
-
-```bash
-cd /Users/mac/Downloads/overseas-trend-radar
 python3 main.py --dry-run --debug
 ```
 
-### 2. 推送到飞书
+如需模型加工，先在本地环境中配置 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。GitHub Secrets 不会自动同步到本机，程序也不会自动读取 `.env` 文件。
+
+正式发送前设置 `FEISHU_WEBHOOK_URL`，然后运行：
 
 ```bash
-cd /Users/mac/Downloads/overseas-trend-radar
-FEISHU_WEBHOOK_URL='你的 webhook' python3 main.py --send
+python3 main.py --send --skip-if-already-sent
 ```
 
-### 3. 指定日期试跑
+指定报告日期可加 `--date YYYY-MM-DD`；不传 `--send` 或 `--dry-run` 时默认预览。本地预览会更新本地缓存和诊断文件，但不更新正式发送日期。
 
-```bash
-cd /Users/mac/Downloads/overseas-trend-radar
-python3 main.py --dry-run --date 2026-04-07 --debug
-```
-
-## GitHub Actions 执行方案
-
-当前支持两种方式：
-
-- 直接使用 GitHub Actions 内置 `schedule`
-- 用外部 cron 调用 `workflow_dispatch`
-
-### 1. 把项目放到 GitHub 仓库
-
-- 直接上传 [overseas-trend-radar](/Users/mac/Downloads/overseas-trend-radar) 整个目录
-
-### 2. 配置 GitHub Actions Secrets
-
-默认推荐直接用 **仓库级 Secret**，不需要先创建 GitHub Environment。
-
-路径：
-
-- 打开 GitHub 仓库
-- 进入 `Settings`
-- 进入 `Secrets and variables`
-- 点击 `Actions`
-- 在 `Repository secrets` 里新增下面这些键
-
-> 当前 workflow 直接读取的是仓库级 `Actions secrets`。  
-> 也就是说，对方仓库只要在 `Repository secrets` 里配置即可，不需要额外配置 `Environment secrets`。  
-> 只有当他们后续想做更细粒度的权限隔离，才需要再把 workflow 改成绑定某个 environment。
-
-必需：
-
-- `FEISHU_WEBHOOK_URL`
-  - 值：飞书群机器人的 webhook 地址
-  - 用途：正式发送晨报卡片
-
-建议：
-
-- `OPENAI_API_KEY`
-  - 值：模型网关的 API Key
-  - 用途：启用大模型结构化翻译、完整摘要、运营意义提炼、动作建议增强
-
-- `OPENAI_BASE_URL`
-  - 值：OpenAI 兼容网关地址
-  - 示例：`https://your-gateway.example.com`
-  - 说明：脚本会自动兼容补全到 `/v1/chat/completions`，不要求你手动写完整接口路径
-
-- `OPENAI_MODEL`
-  - 值：模型名
-  - 示例：`gpt-4.1`、`gpt-4o-mini` 或你们网关实际暴露的模型名
-
-可选：
-
-- `DEEPL_API_KEY`
-  - 值：DeepL API Key
-  - 用途：当未启用 LLM 或某些条目未走 LLM 增强时，作为翻译补充
-
-如果未配置 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`：
-
-- workflow 仍然可以跑
-- 会尝试生成规则筛选 + 基础翻译的直接翻译版，并明确标注
-- 只有基础翻译确认成功且内容通过质量检查，才发送直译版
-- 基础翻译也失败时停止正式日报，尝试发送简短失败通知，并让 Actions 标记失败
-
-### 3. 启用工作流
-
-- 工作流文件是 [.github/workflows/daily-report.yml](/Users/mac/Downloads/overseas-trend-radar/.github/workflows/daily-report.yml)
-- 当前 workflow 已内置 GitHub `schedule`
-- 默认定时是北京时间每天 `09:20`
-- 也支持手动点 `Run workflow` 立即试跑
-- 如果你更信任外部 cron，也可以继续让外部服务调用 `workflow_dispatch`
-
-### 4. 试运行
-
-- 在 GitHub Actions 页面手动运行一次
-- 可选输入 `report_date`
-- 建议保留 `skip_if_already_sent = true`
-- 勾选 `dry_run = true` 可使用真实信源和已配置的模型、翻译服务生成预览，全程不发送飞书消息（包括失败通知）
-- 运行后产物保留 14 天；在 Actions Summary 和 `report-output/run_status.json` 中查看生成模式、失败环节及发送状态
-
-### 5. 外部定时触发
-
-- 推荐用 `cron-job.org` 免费版
-- 具体配置见 [EXTERNAL_CRON_SETUP.md](/Users/mac/Downloads/overseas-trend-radar/EXTERNAL_CRON_SETUP.md)
-
-## 发送确认与故障排查
-
-- 正常：发送完整日报，模型参与摘要、精选和运营建议。
-- LLM 未配置、请求失败或结果无效：仅在入选新闻的标题与独立摘要都已确认翻译成功时，发送标注“直接翻译版”的日报；不附模板运营建议。
-- LLM 与基础翻译均不可用：不发送正式日报，尝试发送一条简短失败通知，包含模型/翻译失败原因与运行链接；即使通知成功，Actions 仍返回失败，且不记录正式日报已发送。
-- 飞书：必须收到明确成功的 `code: 0` 或 `StatusCode: 0`。业务拒绝、缺失/冲突状态码、网络超时都不能记录为已发送。
-- POST 不自动重试。发送结果为 `unconfirmed` 时，请先核对群里是否已收到，再决定补跑，避免重复发送。
-- 新闻、节庆和价格共用 36 条总预算；先为节庆和价格预留位置，再按原有新闻评分保留其余条目，避免各栏目单独合规却在总量检查时整份失败。质量闸门继续保留。
-- 已确认当天发送成功时，保留 `skip_if_already_sent = true` 会在抓取前直接跳过。
-- 其他抓取、质量检查和程序异常在 Actions 中标记失败；本次不新增通用群告警、自动保活或定时变更。
-
-在运行页面的 Summary，或下载 `report-output` 中的下列文件排查：
-
-| 文件 | 内容 |
-| --- | --- |
-| `run_status.json` | 报告日期、生成模式、失败环节、模型/翻译失败原因、飞书发送状态 |
-| `diagnostics.json` | 抓取、翻译、模型和质量检查的诊断信息 |
-| `quality_errors.json` | 内容质量检查失败的具体条件（若有） |
-| `last_report.md` / `last_card.json` | 通过生成检查的日报预览和卡片；失败时不会残留上次的日报 |
-
-退出码：`0` 正常/直译版/重复跳过，`1` 程序异常，`2` 缺少飞书配置，`3` 飞书失败或结果未确认，`4` 内容质量检查失败，`5` LLM 与基础翻译均不可用。预览模式也执行生成质量检查，但不发送任何飞书消息、不更新正式发送日期，Actions 也不保存其状态缓存。
-
-本地测试（无第三方 Python 依赖、不调用真实服务、不向群发消息）：
+运行不调用外部服务的测试：
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-## 当前信源
+## 维护入口
 
-### 头部发行
+| 文件 | 用途 |
+| --- | --- |
+| [main.py](main.py) | 信源、筛选规则、翻译、模型加工和飞书发送 |
+| [daily-report.yml](.github/workflows/daily-report.yml) | 定时／手动运行、状态缓存和产物归档 |
+| [tests/](tests/) | 发送确认、模型降级、翻译及质量检查测试 |
+| [运行与排错](docs/OPERATIONS.md) | 状态字段、诊断文件、失败处理和补跑 |
+| [外部定时触发](EXTERNAL_CRON_SETUP.md) | 可选方案；默认运行无需配置 |
 
-- Sony Music 官方 feed
-- Warner Music Group 官方 press release feed
-- Universal Music Group 官方 feed
-- Billboard / Rolling Stone / Pitchfork 的发行类内容作为补位信源
-
-### 音乐资讯
-
-- Billboard
-- Rolling Stone Music News
-- Pitchfork News
-
-### 音乐 / AI 产业
-
-- Music Business Worldwide
-- TechCrunch AI
-- The Verge AI
-- Spotify / Apple Music / Amazon Music 官方价格页
-
-### 节庆
-
-- Nager.Date 公共假期 API
-
-### 社媒热点
-
-- Daily Dot Unclick
-- Mashable RSS
-
-### 文化 / 政治
-
-- Variety Film
-- ESPN Soccer
-- The Hill
-- NPR Politics
-
-## 过滤逻辑
-
-- 头部发行：优先三大官方；若主窗口内官方信号过少，则用高相关音乐媒体中的新歌、专辑、MV、预热类内容补位；过滤财报、任命、收购、事故与普通巡演新闻
-- 日期窗口：默认抓取“前一自然日”；必要时补充当日 `09:20` 前的重要更新
-- 去重：优先按标准化标题去重，后续建议继续扩展为“事件聚类去重”
-- AI / 产业：只保留 AI、流媒体、价格、版权、分发、平台相关内容
-- 订阅价格：只有官方页面快照发生变化时才提示
-- 节庆：按国家抓全年公共假期，默认抓 `25-30 天预警` 和 `5 天内提醒`
-- 政策：只做轻量观察，默认最多展示 1-2 条
-- 中文摘要：先准备基础翻译，再用模型加工；模型任一环节失败时，恢复未经模型修改的基础翻译版本。翻译未确认成功时停止正式日报，不用中文模板假装翻译成功
-- 本地默认仅预览，也会尝试基础翻译；GitHub Actions 正式运行发送日报。两者使用相同的翻译确认与质量检查逻辑
-- 若配置 `DEEPL_API_KEY`，GitHub Actions 使用 DeepL；否则使用免费翻译接口。只缓存成功的中文翻译，旧缓存中的失败原文不会被当作成功译文
-- 若同时配置 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`，会额外生成更完整的中文标题、运营意义、市场提示和动作建议
-
-## 当前输出结构
-
-晨报固定输出为以下 7 个区块：
-
-1. `【今日三大信号】`
-2. `【头部发行】`
-3. `【平台 / AI / 产业】`
-4. `【社媒趋势】`
-5. `【节庆预警】`
-6. `【跨界 / 政策观察】`
-7. `【今日执行建议】`
-
-## 建议部署方案
-
-### 方案 A：外部 cron + GitHub Actions
-
-- 免费且比 GitHub 原生 `schedule` 更稳
-- GitHub 只执行，不负责定时
-- 最适合当前版本
-
-### 方案 B：本机 `launchd` 定时
-
-- 成本最低
-- 适合只在个人电脑上跑
-- 稳定性取决于设备是否在线
-
-### 方案 C：云函数 / 轻量服务器
-
-- 最稳，适合长期团队化
-- 成本略高于前两者
-- 后续适合加数据库、网页后台、多群推送
-
-## 说明
-
-- 这是一个适合今天上线试运行的 V1 版本
-- “民众本地集体事件”目前优先用公共假期覆盖，后续可继续扩展到重点国家新闻源
-- 如果你要，我下一步可以继续加：
-  - 国家 / 语区维度输出
-  - 西语区专项监控
-  - 白名单艺人库
-  - 飞书多群分发
-  - 节庆民众集体行为事件信源
+`data/state.json` 保存价格、翻译、模型缓存和最近一次成功发送记录。Actions 通过缓存恢复它；防重复发送依赖该状态，缓存缺失时无法确认是否已发送。更多限制见排错文档。

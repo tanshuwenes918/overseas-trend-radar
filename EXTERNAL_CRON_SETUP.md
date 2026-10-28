@@ -1,11 +1,15 @@
-# 外部定时触发 GitHub Actions
+# 外部定时触发 GitHub Actions（可选）
 
-推荐方案：`cron-job.org` -> `GitHub workflow_dispatch` -> `GitHub Actions 执行脚本` -> `飞书`
+[返回 README](README.md)
+
+默认使用仓库内置的 GitHub Actions 定时即可，无需配置外部服务。仅在需要额外的触发来源时考虑本方案；外部触发仍依赖 GitHub Actions 可用，不保证准点执行。
+
+调用方式：`cron-job.org` -> `GitHub workflow_dispatch` -> `GitHub Actions 执行脚本` -> `飞书`
 
 这样做的原因很简单：
 
 - GitHub 自带 `schedule` 事件偶尔会延迟或丢触发
-- 外部 cron 更适合做“准点叫醒”
+- 外部 cron 可以增加一个独立的定时触发来源
 - GitHub Actions 继续负责执行和产物归档
 
 ## 你需要准备的 2 个东西
@@ -69,7 +73,7 @@ Content-Type: application/json
 说明：
 
 - `ref` 固定填 `main`
-- `skip_if_already_sent` 设为 `true`，这样就算主任务和兜底任务都打到了，也只会发一次
+- `skip_if_already_sent` 设为 `true`，当状态缓存中已记录该报告日期成功发送时会跳过。缓存缺失或发送结果未确认时仍需人工核对，详见 [补跑与防重复限制](docs/OPERATIONS.md#补跑与防重复限制)
 
 ## 如果你想指定某一天补发
 
@@ -102,9 +106,9 @@ gh run list --repo tanshuwenes918/overseas-trend-radar --workflow daily-report.y
 - `concurrency`：避免多个相同工作流并发挤在一起
 - `skip_if_already_sent`：如果当天已经成功发过，就自动跳过
 
-所以推荐保留两个外部任务：
+如果选择配置主任务和兜底任务，可使用：
 
 - `09:20` 主任务
 - `09:30` 兜底任务
 
-这样即使主任务偶发失败，兜底任务还能接上；如果主任务成功，兜底任务会自动跳过，不会双发。
+主任务偶发失败时，兜底任务可以再次尝试。主任务成功且状态缓存恢复正常时，兜底任务会跳过。若前次发送结果未确认，自动兜底仍可能重发；无法接受这一重复风险时，只配置一个触发时间，核对群内消息后再手动补跑。
