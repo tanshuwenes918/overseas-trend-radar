@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -800,6 +800,7 @@ class ReportHealth:
     stage: str = "starting"
     delivery: str = "not_attempted"
     llm_failures: dict[str, str] = field(default_factory=dict)
+    llm_warnings: dict[str, str] = field(default_factory=dict)
     llm_protocols: dict[str, str] = field(default_factory=dict)
     translation_failures: list[dict[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -853,6 +854,8 @@ def finish_run(health: ReportHealth, diagnostics: list[str], exit_code: int) -> 
         summary += f"LLM {stage}：{protocol}\n"
     for stage, reason in health.llm_failures.items():
         summary += f"LLM {stage}：{reason}\n"
+    for stage, reason in health.llm_warnings.items():
+        summary += f"LLM {stage}提示：{reason}\n"
     for error in health.errors:
         summary += f"失败原因：{error}\n"
     print("\n运行结果：\n" + summary)
@@ -898,7 +901,7 @@ def direct_translation_notice(health: ReportHealth) -> str:
     stages = "、".join(LLM_STAGE_NAMES.get(stage, stage) for stage in health.llm_failures)
     return (
         f"⚠️ 本期为直接翻译版。LLM 的{stages or '加工'}未完成，新闻使用基础翻译和规则筛选，"
-        "未附 AI 运营建议。请项目维护人检查模型接口配置，必要时更新 Actions Secrets 中的对应字段。"
+        "未附 AI 运营建议。请项目维护人查看本次 Actions 的 Summary 和诊断信息，按具体原因排查。"
     )
 
 
@@ -2173,6 +2176,8 @@ def call_llm_json(
     diagnostics: list[str],
     cache_namespace: str,
     health: ReportHealth,
+    *,
+    cache_validator: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any] | None:
     if not llm_is_configured():
         llm_failed(health, diagnostics, cache_namespace, "模型配置不完整，请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL")
@@ -2196,8 +2201,12 @@ def call_llm_json(
         with TRANSLATION_CACHE_LOCK:
             cached = cache.get(cache_key)
         if isinstance(cached, dict):
-            health.llm_protocols[cache_namespace] = "cache"
-            return cached
+            if cache_validator is None or cache_validator(cached):
+                health.llm_protocols[cache_namespace] = "cache"
+                return cached
+            with TRANSLATION_CACHE_LOCK:
+                cache.pop(cache_key, None)
+            diagnostics.append(f"LLM {cache_namespace}：忽略未通过内容校验的缓存")
 
         for index, (protocol, url) in enumerate(endpoints):
             try:
@@ -2214,8 +2223,9 @@ def call_llm_json(
                     continue
                 raise
             parsed = extract_json_payload(llm_response_text(protocol, response))
-            with TRANSLATION_CACHE_LOCK:
-                cache[cache_key] = parsed
+            if cache_validator is None or cache_validator(parsed):
+                with TRANSLATION_CACHE_LOCK:
+                    cache[cache_key] = parsed
             health.llm_protocols[cache_namespace] = protocol
             diagnostics.append(f"LLM {cache_namespace}：{protocol} 调用成功")
             return parsed
@@ -2233,6 +2243,43 @@ def call_llm_json(
     ) as exc:
         llm_failed(health, diagnostics, cache_namespace, error_reason(exc))
         return None
+
+
+def validated_enrichment(
+    result: dict[str, Any], expected_ids: set[str],
+) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:
+    """Validate each requested ID independently, so only failed items need repair."""
+    valid: dict[str, tuple[str, str]] = {}
+    issues = {item_id: "缺少返回条目" for item_id in expected_ids}
+    result_items = result.get("items")
+    if not isinstance(result_items, list):
+        return valid, {item_id: "返回 items 格式错误" for item_id in expected_ids}
+    seen: set[str] = set()
+    for entry in result_items:
+        if not isinstance(entry, dict):
+            continue
+        item_id = entry.get("id")
+        if not isinstance(item_id, str) or item_id not in expected_ids:
+            continue
+        if item_id in seen:
+            valid.pop(item_id, None)
+            issues[item_id] = "重复返回 ID"
+            continue
+        seen.add(item_id)
+        title, summary = entry.get("cn_title"), entry.get("summary_zh")
+        if not isinstance(title, str) or not has_cjk(title):
+            issues[item_id] = "缺少有效中文标题"
+            continue
+        if not isinstance(summary, str) or not has_cjk(summary):
+            issues[item_id] = "缺少有效中文摘要"
+            continue
+        title, summary = normalize_whitespace(title), normalize_whitespace(summary)
+        if title == summary:
+            issues[item_id] = "摘要与标题相同"
+            continue
+        valid[item_id] = (title, summary)
+        issues.pop(item_id, None)
+    return valid, issues
 
 
 def enrich_items_with_llm(
@@ -2270,6 +2317,7 @@ def enrich_items_with_llm(
     system_prompt = (
         "你是海外音乐与内容运营分析师。"
         "请把输入新闻加工成适合中国团队阅读的运营情报，输出简体中文 JSON。"
+        "必须为每个输入 ID 返回且仅返回一条结果，保留原始 ID，不得遗漏、重复、改号或自行筛选新闻。"
         "每条新闻只给出更完整的中文标题和 60 到 110 字的一行摘要。"
         "摘要必须补充标题未涵盖的关键信息（时间、数据、平台、作品、影响点），不能重复或复述标题内容。"
         "不要写运营意义、可执行动作或模板化建议。"
@@ -2288,37 +2336,54 @@ def enrich_items_with_llm(
             ]
         },
     }
-    result = call_llm_json(system_prompt, payload, state, diagnostics, "item_enrichment", health)
-    if result is None:
-        return
-
-    result_items = result.get("items", [])
-    if not isinstance(result_items, list):
-        llm_failed(health, diagnostics, "item_enrichment", "新闻加工返回格式错误")
-        return
-
     by_id = {payload_item["id"]: item for payload_item, item in zip(payload_items, items)}
-    valid_ids: set[str] = set()
-    for enriched in result_items:
-        if not isinstance(enriched, dict):
-            continue
-        item_id = str(enriched.get("id", ""))
-        item = by_id.get(item_id)
-        if not item:
-            continue
-        title = enriched.get("cn_title")
-        candidate_summary = enriched.get("summary_zh")
-        if not isinstance(title, str) or not has_cjk(title) or not isinstance(candidate_summary, str) or not has_cjk(candidate_summary):
-            continue
-        item.cn_title = normalize_whitespace(title)
-        candidate_summary = normalize_whitespace(candidate_summary)
-        # LLM 摘要与标题重复时置空，不回退到 heuristic_cn_summary
-        if candidate_summary and item.cn_title and candidate_summary == item.cn_title:
-            continue
-        item.cn_summary = candidate_summary if has_cjk(candidate_summary) else ""
-        valid_ids.add(item_id)
-    if valid_ids != set(by_id):
-        llm_failed(health, diagnostics, "item_enrichment", "新闻加工结果缺少条目或有效中文标题、摘要")
+    completed: dict[str, tuple[str, str]] = {}
+    # A successful API response can still omit items. Repair only those items once;
+    # Failed repair requests cannot invalidate the already validated AI results.
+    for attempt in range(2):
+        requested_ids = {entry["id"] for entry in payload["items"]}
+        result = call_llm_json(
+            system_prompt, payload, state, diagnostics, "item_enrichment", health,
+            cache_validator=lambda value: not validated_enrichment(value, requested_ids)[1],
+        )
+        if result is None:
+            if not completed:
+                return
+            reason = health.llm_failures.pop("item_enrichment")
+            break
+        valid, issues = validated_enrichment(result, requested_ids)
+        completed.update(valid)
+        pending = [entry for entry in payload_items if entry["id"] not in completed]
+        if not pending:
+            break
+        detail = "；".join(f"{entry['id']}: {issues[entry['id']]}" for entry in pending)
+        if attempt == 0:
+            diagnostics.append(
+                f"LLM item_enrichment：已通过 {len(completed)}/{len(by_id)} 条，仅补全 {len(pending)} 条（{detail}）"
+            )
+            payload = {**payload, "items": pending, "repair_issues": issues}
+        else:
+            reason = f"新闻加工补全后仍不完整（{detail}）"
+            if not completed:
+                llm_failed(health, diagnostics, "item_enrichment", reason)
+                return
+
+    for item_id, (title, summary) in completed.items():
+        by_id[item_id].cn_title = title
+        by_id[item_id].cn_summary = summary
+    if len(completed) < len(by_id):
+        dropped_ids = [item_id for item_id in by_id if item_id not in completed]
+        warning = (
+            f"保留 {len(completed)}/{len(by_id)} 条已完成 AI 加工的新闻，"
+            f"剔除未完成条目 {','.join(dropped_ids)}；{reason}"
+        )
+        health.llm_warnings["item_enrichment"] = warning
+        diagnostics.append(f"LLM item_enrichment：{warning}")
+        keep_objects = {id(by_id[item_id]) for item_id in completed}
+        for section in sections:
+            sections[section] = [item for item in sections[section] if id(item) in keep_objects]
+    else:
+        diagnostics.append(f"LLM item_enrichment：内容校验通过 {len(completed)}/{len(by_id)} 条")
 
 
 def empty_report_sections() -> dict[str, list[NewsItem]]:
@@ -3913,23 +3978,36 @@ def run_report(args: argparse.Namespace, health: ReportHealth, diagnostics: list
     price_alerts = fetch_price_alerts(report_dt, state, diagnostics)
     action_plan: dict[str, list[str]] = {}
     if not health.llm_failures:
-        sections = editorial_select_sections(sections, state, diagnostics, audit=audit, health=health)
-    if not health.llm_failures:
+        # Keep validated AI news even if the later selection request fails or
+        # partially mutates its working copy before failing validation.
+        selected_sections = editorial_select_sections(copy.deepcopy(sections), state, diagnostics, audit=audit, health=health)
+        if "editorial_selection" not in health.llm_failures:
+            sections = selected_sections
+        else:
+            sections = enforce_report_limits(sections)
+            audit.pop("llm_selected", None)
+    if "item_enrichment" not in health.llm_failures:
         action_plan = generate_action_plan(report_dt.date(), sections, holidays, price_alerts, state, diagnostics, health)
+        if "action_plan" in health.llm_failures:
+            action_plan = {}
 
     notice = ""
-    if health.llm_failures:
+    if "item_enrichment" in health.llm_failures:
         health.mode = "direct_translation"
         sections = enforce_report_limits(direct_sections)
         action_plan = {}
         audit.pop("llm_selected", None)
         notice = direct_translation_notice(health)
+    elif health.llm_failures:
+        health.mode = "ai_partial"
+        stages = "、".join(LLM_STAGE_NAMES.get(stage, stage) for stage in health.llm_failures)
+        notice = f"⚠️ 本期新闻已完成 AI 加工；{stages}未完成，已保留可用新闻。详情见本次 Actions。"
 
     # The quality gate counts holidays and prices too. Reserve their slots before
     # choosing news; otherwise valid per-section limits can still block a report.
     supplementary_count = sum(len(items) for items in holidays.values()) + len(price_alerts)
     sections = enforce_report_limits(sections, max_items=max(0, MAX_REPORT_ITEMS - supplementary_count))
-    if health.llm_failures:
+    if health.mode == "direct_translation":
         health.translation_failures = [
             {"source": item.source_name, "link": item.link, "reason": item.translation_error or "未确认翻译成功"}
             for section in REPORT_SECTION_ORDER
