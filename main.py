@@ -3535,8 +3535,10 @@ def generate_action_plan(
     }
     system_prompt = (
         "你是海外音乐平台运营负责人。"
-        "请把当日资讯整理成极简运营建议，输出简体中文 JSON。"
-        "只输出字符串数组，不要对象，不要 priority/time_window/owner/details/success_check。"
+        "请把当日资讯整理成极简运营建议，严格按输入 output_schema 返回一个 JSON 对象。"
+        "对象必须包含 app_actions、social_actions、localization_actions、watchouts 四个原样英文键。"
+        "每个键的值必须是简体中文字符串数组；无建议时使用空数组 []，不可省略键或改成其他字段。"
+        "数组元素只允许一句建议字符串，不要嵌套对象或 priority/time_window/owner/details/success_check。"
         "每条一句话，短、直接、能执行。总建议数控制在 3 到 5 条。"
     )
     result = call_llm_json(system_prompt, payload, state, diagnostics, "action_plan", health)
