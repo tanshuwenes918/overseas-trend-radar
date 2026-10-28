@@ -223,13 +223,18 @@ class LlmApiTests(unittest.TestCase):
                     self.assertNotIn('private-provider-error', str(self.diagnostics))
 
     def test_model_not_found_404_does_not_switch_protocol(self):
-        for code in ('model_not_found', 'model_not_supported'):
-            with self.subTest(code=code):
+        bodies = [
+            {'error': {'code': 'model_not_found'}},
+            {'error': {'code': 'model_not_supported'}},
+            {'error': {'type': 'model_not_found'}},
+            {'code': 'model_not_found'},
+        ]
+        for payload in bodies:
+            with self.subTest(payload=payload):
                 self.state = {}
                 self.health = report.ReportHealth('2026-10-28')
-                body = json.dumps({'error': {'code': code, 'message': 'private-provider-error'}}).encode()
                 error = urllib.error.HTTPError('https://gateway.invalid/v1/responses', 404,
-                                               'private-provider-error', {}, io.BytesIO(body))
+                                               'private-provider-error', {}, io.BytesIO(json.dumps(payload).encode()))
                 try:
                     with patch.object(report, 'post_json', side_effect=error) as post:
                         self.assertIsNone(self.call())

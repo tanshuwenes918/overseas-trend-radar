@@ -1642,8 +1642,10 @@ def is_missing_llm_route(exc: urllib.error.HTTPError) -> bool:
     try:
         body = json.loads(exc.read(8192).decode("utf-8", errors="replace"))
         error = body.get("error", {}) if isinstance(body, dict) else {}
-        code = str(error.get("code", "")) if isinstance(error, dict) else ""
-        if "model" in code.lower():
+        codes = [body.get("code", "")] if isinstance(body, dict) else []
+        if isinstance(error, dict):
+            codes.extend([error.get("code", ""), error.get("type", "")])
+        if any("model" in str(code).lower() for code in codes):
             return False  # A missing model is not a protocol/route mismatch.
     except (ValueError, TypeError, OSError):
         pass
