@@ -2200,7 +2200,9 @@ def empty_report_sections() -> dict[str, list[NewsItem]]:
     return {section: [] for section in SECTION_TITLES if section not in {"holiday_events", "ops_suggestions"}}
 
 
-def enforce_report_limits(sections: dict[str, list[NewsItem]]) -> dict[str, list[NewsItem]]:
+def enforce_report_limits(
+    sections: dict[str, list[NewsItem]], max_items: int = MAX_REPORT_ITEMS,
+) -> dict[str, list[NewsItem]]:
     limited = empty_report_sections()
     for section, items in sections.items():
         section_limit = SECTION_LIMITS.get(section, 3)
@@ -2220,7 +2222,7 @@ def enforce_report_limits(sections: dict[str, list[NewsItem]]) -> dict[str, list
         if section not in {"holiday_events", "ops_suggestions"}
         for item in limited.get(section, [])
     ]
-    if len(all_items) <= MAX_REPORT_ITEMS:
+    if len(all_items) <= max_items:
         return limited
 
     keep_ids = {
@@ -2232,7 +2234,7 @@ def enforce_report_limits(sections: dict[str, list[NewsItem]]) -> dict[str, list
                 pair[1].published_at.timestamp() if pair[1].published_at else 0,
             ),
             reverse=True,
-        )[:MAX_REPORT_ITEMS]
+        )[:max_items]
     }
     for section in limited:
         limited[section] = [item for item in limited[section] if id(item) in keep_ids]
@@ -3792,13 +3794,19 @@ def run_report(args: argparse.Namespace, health: ReportHealth, diagnostics: list
         sections = enforce_report_limits(direct_sections)
         action_plan = {}
         audit.pop("llm_selected", None)
+        notice = direct_translation_notice(health)
+
+    # The quality gate counts holidays and prices too. Reserve their slots before
+    # choosing news; otherwise valid per-section limits can still block a report.
+    supplementary_count = sum(len(items) for items in holidays.values()) + len(price_alerts)
+    sections = enforce_report_limits(sections, max_items=max(0, MAX_REPORT_ITEMS - supplementary_count))
+    if health.llm_failures:
         health.translation_failures = [
             {"source": item.source_name, "link": item.link, "reason": item.translation_error or "未确认翻译成功"}
             for section in REPORT_SECTION_ORDER
             if section not in {"holiday_events", "ops_suggestions"}
             for item in sections.get(section, []) if not item.translation_verified
         ]
-        notice = direct_translation_notice(health)
 
     audit["final_selected"] = [
         audit_news_item(item)

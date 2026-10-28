@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 import urllib.error
-from datetime import datetime
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -317,6 +317,39 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(status['stage'], 'fetching')
         self.assertNotIn('private-details', str(status))
         self.assertEqual(self.sent, [])
+
+    def test_news_and_holidays_share_total_budget_before_quality_check(self):
+        for section in report.REPORT_SECTION_ORDER:
+            if section in {'holiday_events', 'ops_suggestions'}:
+                continue
+            self.sections[section] = []
+            for index in range(6):
+                item = news_item()
+                item.section = section
+                item.title = f'Music film album news {section} {index}'
+                item.link += f'/{section}/{index}'
+                item.score += index
+                self.sections[section].append(item)
+        holidays = {'today': [
+            {'name': f'Holiday {index}', 'country_name': '测试国家', 'date': date(2026, 10, 28), 'days_left': 0}
+            for index in range(10)
+        ], 'week': [], 'advance': []}
+        self.failing_stage = 'item_enrichment'
+        with patch.object(report, 'fetch_holiday_items', return_value=holidays):
+            code, status = self.run_report('--send')
+        self.assertEqual(code, 0)
+        self.assertEqual(status['mode'], 'direct_translation')
+        selected = json.loads((self.data / 'final_selected.json').read_text())
+        self.assertEqual(len(selected), 26)
+        self.assertEqual(len(selected) + 10, report.MAX_REPORT_ITEMS)
+
+    def test_quality_failure_still_blocks_formal_report(self):
+        with patch.object(report, 'validate_report_quality', return_value=['缺少合格信源']):
+            code, status = self.run_report('--send')
+        self.assertEqual(code, 4)
+        self.assertIn('缺少合格信源', status['errors'])
+        self.assertEqual(self.sent, [])
+        self.assertNotIn('last_sent_date', self.saved_state().get('delivery', {}))
 
 
 if __name__ == '__main__':
