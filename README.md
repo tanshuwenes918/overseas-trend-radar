@@ -57,9 +57,9 @@
 | --- | --- |
 | `https://gateway.example/v1/responses` | Responses |
 | `https://gateway.example/v1/chat/completions` | Chat Completions |
-| `https://gateway.example` 或 `https://gateway.example/v1` | Chat Completions |
+| `https://gateway.example` 或 `https://gateway.example/v1` | Responses（默认优先） |
 
-完整端点会原样保留，不会重复拼接路径；自定义路径前缀也会保留。服务仅支持 Responses 时，建议直接填写完整 `/responses` 地址。仅在端点返回 HTTP 404（非明确模型不存在）或 405 时尝试另一接口；认证、限流或服务异常不会通过切换接口掩盖。模型服务需支持相应接口的 JSON 输出格式。
+完整端点会原样保留，不会重复拼接路径；自定义路径前缀也会保留。默认优先 Responses，明确填写完整 Chat 端点时尊重该选择。手动运行的 `llm_api` 默认为 `auto`；需要单独验证某种协议时，可选 `responses` 或 `chat`，指定后不自动切换。仅在端点返回 HTTP 404（非明确模型不存在）或 405 时尝试另一接口；认证、限流或服务异常不会通过切换接口掩盖。模型服务需支持相应接口的 JSON 输出格式。
 
 模型未配置时仍可尝试生成直接翻译版，发送条件见上表。不要将密钥写入代码或提交到仓库。
 

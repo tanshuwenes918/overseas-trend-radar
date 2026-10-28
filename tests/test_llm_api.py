@@ -34,13 +34,18 @@ def http_error(url, code):
 
 
 class EndpointTests(unittest.TestCase):
-    def test_root_and_v1_keep_chat_as_default(self):
+    def setUp(self):
+        item = patch.dict('os.environ', {'LLM_API_STYLE': 'auto'})
+        item.start()
+        self.addCleanup(item.stop)
+
+    def test_root_and_v1_prefer_responses(self):
         for base in ('https://gateway.invalid', 'https://gateway.invalid/',
                      'https://gateway.invalid/v1', 'https://gateway.invalid/v1/'):
             with self.subTest(base=base), patch.object(report, 'OPENAI_BASE_URL', base):
                 self.assertEqual(report.llm_endpoint_candidates(), [
-                    ('chat', 'https://gateway.invalid/v1/chat/completions'),
                     ('responses', 'https://gateway.invalid/v1/responses'),
+                    ('chat', 'https://gateway.invalid/v1/chat/completions'),
                 ])
 
     def test_explicit_endpoint_selects_protocol_and_preserves_custom_prefix(self):
@@ -55,6 +60,13 @@ class EndpointTests(unittest.TestCase):
                     self.assertEqual(candidates[0], (protocol, prefix + suffix))
                     self.assertEqual(candidates[1][1], prefix + other_suffix)
                     self.assertEqual(candidates[1][0], 'chat' if protocol == 'responses' else 'responses')
+
+    def test_protocol_can_be_pinned_for_service_testing(self):
+        for style, suffix in [('responses', '/responses'), ('chat', '/chat/completions')]:
+            with self.subTest(style=style), \
+                 patch.object(report, 'OPENAI_BASE_URL', 'https://gateway.invalid/v1'), \
+                 patch.dict('os.environ', {'LLM_API_STYLE': style}):
+                self.assertEqual(report.llm_endpoint_candidates(), [(style, 'https://gateway.invalid/v1' + suffix)])
 
     def test_url_without_scheme_defaults_to_https(self):
         with patch.object(report, 'OPENAI_BASE_URL', 'gateway.invalid/v1/responses'):
@@ -71,6 +83,7 @@ class LlmApiTests(unittest.TestCase):
             patch.object(report, 'OPENAI_API_KEY', 'private-test-key'),
             patch.object(report, 'OPENAI_BASE_URL', 'https://gateway.invalid/v1/responses'),
             patch.object(report, 'OPENAI_MODEL', 'test-model'),
+            patch.dict('os.environ', {'LLM_API_STYLE': 'auto'}),
         ):
             item.start()
             self.addCleanup(item.stop)
@@ -262,6 +275,24 @@ class LlmApiTests(unittest.TestCase):
             self.assertIsNone(self.call())
         self.assertEqual(post.call_count, 1)
         self.assert_failed_without_cache()
+
+    def test_pinned_protocol_does_not_switch_on_404(self):
+        error = http_error('https://gateway.invalid/v1/responses', 404)
+        try:
+            with patch.dict('os.environ', {'LLM_API_STYLE': 'responses'}), \
+                 patch.object(report, 'post_json', side_effect=error) as post:
+                self.assertIsNone(self.call())
+        finally:
+            error.close()
+        self.assertEqual(post.call_count, 1)
+        self.assert_failed_without_cache()
+
+    def test_invalid_protocol_fails_before_network_request(self):
+        with patch.dict('os.environ', {'LLM_API_STYLE': 'unknown'}), \
+             patch.object(report, 'post_json') as post:
+            self.assertIsNone(self.call())
+        post.assert_not_called()
+        self.assertIn('LLM_API_STYLE', str(self.health.llm_failures))
 
     def test_valid_response_is_reused_only_for_same_service(self):
         with patch.object(report, 'post_json', return_value=responses_response()) as post:

@@ -159,7 +159,7 @@ class PipelineTests(unittest.TestCase):
             patch.object(report, 'enrich_article_excerpts'),
             patch.object(report, 'translate_verified', side_effect=self.translate),
             patch.object(report, 'post_json', side_effect=self.post),
-            patch.dict('os.environ', {'FEISHU_WEBHOOK_URL': WEBHOOK, 'GITHUB_STEP_SUMMARY': str(self.data / 'summary.md')}),
+            patch.dict('os.environ', {'LLM_API_STYLE': 'auto', 'FEISHU_WEBHOOK_URL': WEBHOOK, 'GITHUB_STEP_SUMMARY': str(self.data / 'summary.md')}),
             patch('sys.stdout', new_callable=io.StringIO),
         ]
         for item in patches:

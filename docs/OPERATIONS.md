@@ -65,7 +65,7 @@
 | HTTP 5xx／超时 | 模型服务是否可用 |
 | 返回格式错误、缺少条目 | 服务／模型是否支持请求格式，返回内容是否完整 |
 
-`llm_protocols` 记录各阶段成功使用的 `responses`、`chat`，或 `cache`（命中缓存）。`OPENAI_BASE_URL` 填完整 `/responses` 地址可优先使用 Responses；填完整 `/chat/completions` 地址则优先使用 Chat。接口不存在或不支持方法时才尝试另一种，模型不存在、认证失败、限流和服务异常需处理实际原因。更换服务地址或首选协议会隔离原有模型缓存。
+`llm_protocols` 记录各阶段成功使用的 `responses`、`chat`，或 `cache`（命中缓存）。`OPENAI_BASE_URL` 为根地址、`/v1` 或完整 `/responses` 地址时优先使用 Responses；填完整 `/chat/completions` 地址则优先使用 Chat。手动运行可用 `llm_api` 固定单一协议进行验证；本地对应环境变量为 `LLM_API_STYLE`，默认为 `auto`。接口不存在或不支持方法时才尝试另一种，模型不存在、认证失败、限流和服务异常需处理实际原因。更换服务地址或首选协议会隔离原有模型缓存。
 
 直译版已成功发送时，也会记录该报告日期。修好模型后若要再发完整版本，应先确认需要重复发送，再关闭跳过选项。
 

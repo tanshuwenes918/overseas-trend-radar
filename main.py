@@ -1537,7 +1537,12 @@ def llm_endpoint_candidates() -> list[tuple[str, str]]:
         protocols = ["chat", "responses"]
     else:
         prefix = path or "/v1"
-        protocols = ["chat", "responses"]
+        protocols = ["responses", "chat"]
+    api_style = os.environ.get("LLM_API_STYLE", "auto").strip().lower()
+    if api_style not in {"auto", "chat", "responses"}:
+        raise LLMOutputError("LLM_API_STYLE 必须是 auto、chat 或 responses")
+    if api_style != "auto":
+        protocols = [api_style]
     suffixes = {"chat": "/chat/completions", "responses": "/responses"}
     return [
         (protocol, urllib.parse.urlunsplit((parts.scheme, parts.netloc, prefix + suffixes[protocol], "", "")))
@@ -2203,7 +2208,7 @@ def call_llm_json(
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
                 )
             except urllib.error.HTTPError as exc:
-                if index == 0 and is_missing_llm_route(exc):
+                if index == 0 and len(endpoints) > 1 and is_missing_llm_route(exc):
                     diagnostics.append(f"LLM {cache_namespace}：{protocol} 端点不可用（HTTP {exc.code}），尝试另一接口")
                     exc.close()
                     continue
